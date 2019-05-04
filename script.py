@@ -9,6 +9,7 @@ import opencrypt
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import StaleElementReferenceException
@@ -74,6 +75,7 @@ def validate_config(config):
 def alert_on_slack(data, config):
 
     logger.info(str())
+    logger.info('[%d] sensors are found to be disconnected.', len(data))
     if not config.get('slack_hooks', list()):
         logger.info('No webhook is specified. Skipping slack push.')
         return
@@ -166,7 +168,10 @@ def get_disconnected_sensors(driver):
 def main(event, context):
 
     config = read_config()
-    driver = webdriver.Chrome('drivers/chromedriver')
+
+    options = Options()
+    options.headless = True
+    driver = webdriver.Chrome('drivers/chromedriver', chrome_options=options)
 
     try:
         logger.info('Visiting url: %s', config['usm_host_url'])
@@ -193,11 +198,12 @@ def main(event, context):
                 By.CSS_SELECTOR, '#table-sensors-list')))
 
         logger.info('Finding disconnected sensors from page...')
-        disconnected = get_disconnected_sensors(driver)
+        disconn = get_disconnected_sensors(driver)
+
         logger.info('Closing webdriver...')
         driver.close()
 
-        alert_on_slack(disconnected, config)
+        alert_on_slack(disconn, config)
 
     except Exception as exc:
         logger.info('Exception occured in code. Gracefully closing webdriver.')
