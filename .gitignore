@@ -1,0 +1,7 @@
+.venv*/
+drivers/
+_keys
+*.json
+*.json.enc
+*.log
+*.zip
