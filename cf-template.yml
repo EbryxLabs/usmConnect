@@ -115,7 +115,7 @@ Resources:
         S3Bucket: !Ref S3BucketName
         S3Key: !Ref S3CodeArchivePath
       FunctionName: !Ref LambdaName
-      Description: 'Lambda, created from stack, to push USM alarms to JIRA.'
+      Description: 'Lambda, created from stack, to check USM sensors' status.'
       Environment:
         Variables:
           AES_KEY: !Ref AESKey
