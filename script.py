@@ -4,6 +4,7 @@ import time
 import json
 import zipfile
 import logging
+from urllib3.exceptions import NewConnectionError, MaxRetryError
 
 import requests
 import opencrypt
@@ -16,6 +17,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
     StaleElementReferenceException, TimeoutException)
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 
 
 logger = logging.getLogger(__name__)
@@ -26,17 +28,16 @@ handler.setFormatter(logging.Formatter('%(asctime)s: %(message)s'))
 logger.addHandler(handler)
 
 
-def _exit(code, message, response_only=False):
+def _exit(code, message):
 
-    response = {'statusCode': code, 'body': json.dumps({
+    return {'statusCode': code, 'body': json.dumps({
         'error' if code >= 300 else 'success': message})}
-    return response if response_only else exit(response)
 
 
 def read_config():
 
     if not os.environ.get('CONFIG_FILE'):
-        _exit(404, 'No CONFIG_FILE environment variable exists.')
+        return _exit(404, 'No CONFIG_FILE environment variable exists.')
 
     config_file = os.environ['CONFIG_FILE']
     if config_file.startswith(('http', 'https', 'ftp')):
@@ -47,14 +48,14 @@ def read_config():
         if response.status_code < 400:
             ciphertext = response.content
         else:
-            _exit(400, 'Could not fetch config file: %s' % (response))
-
+            return _exit(400, 'Could not fetch config file: '
+                         '%s' % (response))
     else:
         logger.info('Config file prefix tells program to search ' +
                     'for it on filesystem.')
-
         if not os.path.isfile(config_file):
-            _exit(404, 'No Config file on filesystem: %s' % (config_file))
+            return _exit(404, 'No Config file on filesystem: '
+                         '%s' % (config_file))
 
         ciphertext = open(config_file, 'rb').read()
 
@@ -62,54 +63,24 @@ def read_config():
         ciphertext, write_to_file=False, is_ciphertext=True)
     try:
         config = json.loads(content)
-        validate_config(config)
+        validation = validate_config(config)
+
+        if validation and validation.get('statusCode'):
+            return validation
         return config
     except json.JSONDecodeError as exc:
-        _exit(400, str(exc))
+        return _exit(400, str(exc))
 
 
 def validate_config(config):
 
     for key in ['usm_host_url', 'usm_username', 'usm_password',
-                'chrome_package']:
+                'selenium_host']:
         if not config.get(key):
-            _exit(400, 'No `%s` field defined in config.' % (key))
+            return _exit(400, 'No `%s` field defined in config.' % (key))
 
-
-def get_chrome_folder(config):
-
-    if config['chrome_package'].startswith(('http', 'https')):
-        package_folder = '/tmp/chrome_package'
-        os.mkdir(package_folder) if not os.path.isdir(
-            package_folder) else str()
-        package_path = os.path.join(package_folder, 'archive.zip')
-        if not os.path.isfile(package_path):
-            logger.info('Downloading chrome package...')
-            res = requests.get(config['chrome_package'])
-            if res.status_code >= 400:
-                _exit(res.status_code, 'Unexpected response while '
-                      'fetching chrome package')
-
-            open(package_path, 'wb').write(res.content)
-            logger.info('Writing package to: %s', package_path)
-        else:
-            logger.info('Skipping download. Archive already '
-                        'present: %s', package_path)
-
-        logger.info('Unzipping archive...')
-        zfile = zipfile.ZipFile(package_path, 'r')
-        zfile.extractall(package_folder)
-
-        logger.info('Making binaries executeable...')
-        for name in ['chromedriver', 'headless-chromium']:
-            filename = os.path.join(package_folder, name)
-            if os.path.isfile(filename):
-                st = os.stat(filename)
-                os.chmod(filename, st.st_mode | stat.S_IEXEC)
-
-        return package_folder
-    else:
-        return config['chrome_package']
+    if not config['selenium_host'].startswith(('http', 'https')):
+        config['selenium_host'] = 'http://127.0.0.1:4444/wd/hub'
 
 
 def get_slack_text(data, config):
@@ -228,8 +199,9 @@ def get_disconnected_sensors(driver):
 def main(event, context):
 
     config = read_config()
-    folder = get_chrome_folder(config)
-    logger.info('Using chrome folder: %s', folder)
+    if config.get('statusCode'):
+        return config
+
     logger.info(str())
 
     options = Options()
@@ -237,16 +209,23 @@ def main(event, context):
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
 
-    options.binary_location = os.path.join(folder, 'headless-chromium')
-    driver = webdriver.Chrome(os.path.join(
-        folder, 'chromedriver'), chrome_options=options)
-
+    try:
+        logger.info('Connecting to selenium: %s', config['selenium_host'])
+        driver = webdriver.Remote(
+            config['selenium_host'],
+            desired_capabilities={'browserName': 'chrome'},
+            options=options)
+    except (NewConnectionError, MaxRetryError) as exc:
+        alert_on_slack(
+            '> *Critical:* Could not connect to remote selenium '
+            'server: %s' % (config['selenium_host']), config)
+        return _exit(500, str(exc))
     try:
         logger.info('Visiting url: %s', config['usm_host_url'])
         driver.get(config['usm_host_url'])
 
         if 'AlienVault' not in driver.title:
-            _exit(400, 'Unexpected HTML page title at: %s' % (
+            return _exit(400, 'Unexpected HTML page title at: %s' % (
                 config['usm_host_url']))
 
         do_login(driver, config)
@@ -256,7 +235,7 @@ def main(event, context):
         if res and res.get('exit'):
             alert_on_slack('Browser timed out after 3rd retry '
                            'of waiting for element.', config)
-            _exit(400, 'Exiting program after 3rd retry...')
+            return _exit(400, 'Exiting program after 3rd retry...')
 
         sensor_link = driver.find_element_by_css_selector('a#nav-link-sensors')
         logger.info('Visting sensors page link...')
@@ -267,7 +246,7 @@ def main(event, context):
         if res and res.get('exit'):
             alert_on_slack('Browser timed out after 3rd retry '
                            'of waiting for element.', config)
-            _exit(400, 'Exiting program after 3rd retry...')
+            return _exit(400, 'Exiting program after 3rd retry...')
 
         logger.info('Finding disconnected sensors from page...')
         disconn = get_disconnected_sensors(driver)
@@ -281,9 +260,9 @@ def main(event, context):
     except Exception as exc:
         logger.info('Exception occured in code. Gracefully closing webdriver.')
         driver.close()
-        _exit(500, str(exc))
+        return _exit(500, str(exc))
 
-    _exit(200, 'Everything executed smoothly.')
+    return _exit(200, 'Everything executed smoothly.')
 
 
 if __name__ == "__main__":
