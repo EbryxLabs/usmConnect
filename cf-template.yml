@@ -1,0 +1,205 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  LambdaName:
+    Type: String
+    Description: Name of your lambda.
+  LambdaInterval:
+    Type: String
+    Description: Interval of your lambda (in minutes).
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name containing lambda code.
+  S3CodeArchivePath:
+    Type: String
+    Description: Lambda code path inside selected S3 bucket.
+  AESKey:
+    Type: String
+    Description: AES key that code needs to decrypt config file.
+    NoEcho: true
+  AESIV:
+    Type: String
+    Description: AES IV that code needs, along with AES key, to decrypt config file.
+    NoEcho: true
+  ConfigFile:
+    Type: String
+    Description: S3 public path to config file.
+  SubnetIDs:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of Subnet Ids to attach lambda to.
+  SecurityGroupIDs:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: List of Security Group Ids to attach lambda with.
+Resources:
+  IAMRoleInstance:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Join 
+        - ''
+        - - !Ref LambdaName
+          - '-role'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          Effect: Allow
+          Action:
+            - 'sts:AssumeRole'
+          Principal:
+            Service:
+              - lambda.amazonaws.com
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DescribeNetworkInterfaces'
+                Resource: '*'
+  KMSKeyInstance:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      Description: !Join 
+        - ''
+        - - 'A key to encrypt environment variables of lambda: '
+          - !Ref LambdaName
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-default-1
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Join 
+                  - ''
+                  - - 'arn:aws:iam::'
+                    - !Ref 'AWS::AccountId'
+                    - ':role/'
+                    - !Join 
+                      - ''
+                      - - !Ref LambdaName
+                        - '-role'
+                - !Join 
+                  - ''
+                  - - 'arn:aws:iam::'
+                    - !Ref 'AWS::AccountId'
+                    - ':root'
+            Action:
+              - 'kms:*'
+            Resource: '*'
+    DependsOn:
+      - IAMRoleInstance
+  KMSKeyAliasInstance:
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName: !Join
+        - ''
+        - - 'alias/'
+          - !Ref LambdaName
+          - '-key'
+      TargetKeyId: !Ref KMSKeyInstance
+    DependsOn:
+      - KMSKeyInstance
+  LambdaInstance:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Ref S3CodeArchivePath
+      FunctionName: !Ref LambdaName
+      Description: 'Lambda, created from stack, to push USM alarms to JIRA.'
+      Environment:
+        Variables:
+          AES_KEY: !Ref AESKey
+          AES_IV: !Ref AESIV
+          CONFIG_FILE: !Ref ConfigFile
+      Role: !Join 
+        - ''
+        - - 'arn:aws:iam::'
+          - !Ref 'AWS::AccountId'
+          - ':role/'
+          - !Join 
+            - ''
+            - - !Ref LambdaName
+              - '-role'
+      Handler: script.main
+      Runtime: python3.6
+      MemorySize: 128
+      Timeout: '30'
+      KmsKeyArn: !GetAtt 
+        - KMSKeyInstance
+        - Arn
+      VpcConfig:
+        SubnetIds: !Ref SubnetIDs
+        SecurityGroupIds: !Ref SecurityGroupIDs
+    DependsOn:
+      - IAMRoleInstance
+      - KMSKeyInstance
+  CloudWatchEvent:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: !Join
+        - ''
+        - - 'Rule for '
+          - !Ref LambdaName
+          - ' lambda.'
+      Name: !Join 
+        - ''
+        - - !Ref LambdaName
+          - '-rule'
+      ScheduleExpression: !Join
+        - ''
+        - - 'cron(*/'
+          - !Ref LambdaInterval
+          - ' * * * ? *)'
+      State: ENABLED
+      Targets:
+        -
+          Arn: !GetAtt
+            - LambdaInstance
+            - Arn
+          Id: !Join 
+            - ''
+            - - 'ruleTarget'
+              - !Ref LambdaName
+    DependsOn:
+      - LambdaInstance
+  CloudWatchEventPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaName
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt
+        - CloudWatchEvent
+        - Arn
+
+Outputs:
+  LambdaName:
+    Description: Name of created AWS Lambda function.
+    Value: !GetAtt 
+      - LambdaInstance
+      - Arn
+  LambdaAttachedRoleName:
+    Description: Name of attached role to AWS Lambda function.
+    Value: !GetAtt 
+      - IAMRoleInstance
+      - Arn
+  LambdaAttachedKMSKey:
+    Description: Name of attached KMS Key to AWS Lambda function.
+    Value: !GetAtt 
+      - KMSKeyInstance
+      - Arn
+  CloudWatchRule:
+    Description: Name of CloudWatch rule attached to AWS Lambda function.
+    Value: !GetAtt 
+      - CloudWatchEvent
+      - Arn
