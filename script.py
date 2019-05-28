@@ -95,7 +95,7 @@ def get_slack_text(data, config):
     if not data:
         logger.info('No disconnected sensor detected. Skipping slack push.')
         return prepared_string
-    
+
     for entry in data:
         if not(entry.get('name') or entry.get('ip')):
             continue
@@ -104,8 +104,8 @@ def get_slack_text(data, config):
                 entry.get('ip') in config.get('whitelist', list()):
             continue
 
-        prepared_string += '> *Sensor :* %s  *IP :* %s\n' % (
-            entry.get('name', 'N/A'), entry.get('ip', 'N/A'))
+        prepared_string += '> %s *(%s)*\n' % (
+            entry.get('ip', 'N/A'), entry.get('name', 'N/A'))
 
     if prepared_string:
         prepared_string = 'Following sensors are detected to be ' \
@@ -113,12 +113,14 @@ def get_slack_text(data, config):
     else:
         logger.info('Disconnected sensor(s) were whitelisted. '
                     'Skipping slack push.')
-        return prepared_string
+
+    return prepared_string
 
 
 def alert_on_slack(text, config):
 
     if not text:
+        logger.info('No text to push to slack.')
         return
 
     for url in config['slack_hooks']:
