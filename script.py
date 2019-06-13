@@ -227,6 +227,8 @@ def main(event, context):
         driver.get(config['usm_host_url'])
 
         if 'AlienVault' not in driver.title:
+            alert_on_slack('> Browser could not retrieve the '
+                           'main page of USM.', config)
             return _exit(400, 'Unexpected HTML page title at: %s' % (
                 config['usm_host_url']))
 
@@ -235,7 +237,7 @@ def main(event, context):
         logger.info('Waiting for dashboard...')
         res = wait_for_element(driver, 'av-header #header')
         if res and res.get('exit'):
-            alert_on_slack('Browser timed out after 3rd retry '
+            alert_on_slack('> Browser timed out after 3rd retry '
                            'of waiting for element.', config)
             return _exit(400, 'Exiting program after 3rd retry...')
 
@@ -246,7 +248,7 @@ def main(event, context):
         logger.info('Waiting for sensors page...')
         res = wait_for_element(driver, '#table-sensors-list', timeout=15)
         if res and res.get('exit'):
-            alert_on_slack('Browser timed out after 3rd retry '
+            alert_on_slack('> Browser timed out after 3rd retry '
                            'of waiting for element.', config)
             return _exit(400, 'Exiting program after 3rd retry...')
 
@@ -262,6 +264,8 @@ def main(event, context):
     except Exception as exc:
         logger.info('Exception occured in code. Gracefully closing webdriver.')
         driver.close()
+        alert_on_slack('> Unexpected exception occured.\n'
+                       '*`%s`*' % (str(exc)), config)
         return _exit(500, str(exc))
 
     return _exit(200, 'Everything executed smoothly.')
