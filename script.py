@@ -173,29 +173,27 @@ def wait_for_element(driver, selector, timeout=30, count=1):
         wait_for_element(driver, selector, timeout=timeout, count=count+1)
 
 
-def get_disconnected_sensors(driver):
+def get_sensors(driver):
 
-    disconnected = list()
+    sensors = list()
     sensor_rows = driver.find_elements_by_css_selector(
         '#table-sensors-list tr.result-row')
 
     for row in sensor_rows:
         try:
+            _id = row.get_attribute('id').replace('result-row-', str())
             text = row.find_element_by_css_selector(
                 '.result-column-sensor-status').text
-
-            if text.strip().lower() in ['connection lost']:
-                disconnected.append({
-                    'name': row.find_element_by_css_selector(
-                        '.result-column-sensor-name').text.split('\n')[0],
-                    'ip': row.find_element_by_css_selector(
-                        '.result-column-sensor-ip').text
-                })
+            name = row.find_element_by_css_selector(
+                '.result-column-sensor-name').text.split('\n')[0]
+            ip = row.find_element_by_css_selector(
+                '.result-column-sensor-ip').text
+            sensors.append({'id': _id, 'name': name, 'text': text, 'ip': ip})
 
         except StaleElementReferenceException:
-            return get_disconnected_sensors(driver)
+            return get_sensors(driver)
 
-    return disconnected
+    return sensors
 
 
 def main(event, context):
@@ -253,12 +251,14 @@ def main(event, context):
             return _exit(400, 'Exiting program after 3rd retry...')
 
         logger.info('Finding disconnected sensors from page...')
-        disconn = get_disconnected_sensors(driver)
+        sensors = get_sensors(driver)
 
         logger.info('Closing webdriver...')
         driver.close()
 
-        text = get_slack_text(disconn, config)
+        text = get_slack_text([
+            x for x in sensors if x.get(
+                'text', str()).lower() in ['connection lost']], config)
         alert_on_slack(text, config)
 
     except Exception as exc:
