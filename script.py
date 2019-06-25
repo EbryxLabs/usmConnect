@@ -216,10 +216,11 @@ def main(event, context):
             desired_capabilities={'browserName': 'chrome'},
             options=options)
     except (NewConnectionError, MaxRetryError) as exc:
-        alert_on_slack(
-            '> *Critical:* Could not connect to remote selenium '
-            'server: %s' % (config['selenium_host']), config)
+        # alert_on_slack(
+        #     '> *Critical:* Could not connect to remote selenium '
+        #     'server: %s' % (config['selenium_host']), config)
         return _exit(500, str(exc))
+
     try:
         logger.info('Visiting url: %s', config['usm_host_url'])
         driver.get(config['usm_host_url'])
@@ -253,19 +254,66 @@ def main(event, context):
         logger.info('Finding disconnected sensors from page...')
         sensors = get_sensors(driver)
 
-        logger.info('Closing webdriver...')
-        driver.close()
-
-        text = get_slack_text([
-            x for x in sensors if x.get(
-                'text', str()).lower() in ['connection lost']], config)
+        text = get_slack_text([x for x in sensors if x.get(
+            'text', str()).lower() in ['connection lost']], config)
         alert_on_slack(text, config)
 
+        details = dict()
+        for sensor in sensors:
+            if not sensor.get('id') or sensor.get(
+                    'text', str()).lower() in ['connection lost']:
+                continue
+
+            url = config['usm_host_url'] + '/#/sensor/%s' % (sensor.get('id'))
+            logger.info('Visiting sensor page [%s]...', sensor.get('name'))
+            driver.get(url)
+
+            logger.info('Waiting for settings table...')
+            res = wait_for_element(
+                driver, '.av-table-striped.checks', timeout=20)
+            if res and res.get('exit'):
+                alert_on_slack('> Browser timed out after 3rd retry '
+                               'of waiting for element.', config)
+
+            details[sensor.get('name')] = {'network': dict(), 'syslog': list()}
+            for row in driver.find_elements_by_css_selector(
+                    '.av-table-striped.checks tr.ng-scope'):
+                desc = row.find_element_by_css_selector('.ng-binding').text
+                status = row.find_element_by_css_selector('td img.icon')
+                status = status.get_attribute('src') if status else 'N/A'
+                status = 'success' if 'success' in status else \
+                    'error' if 'error' in status else status
+
+                details[sensor.get('name')]['network'][desc] = status
+
+            syslog_tab = driver.find_element_by_id('link-syslog-configuration')
+            syslog_tab.click()
+            res = wait_for_element(
+                driver, '.av-table-striped.syslog', timeout=10)
+            if res and res.get('exit'):
+                alert_on_slack('> Browser timed out after 3rd retry '
+                               'of waiting for element.', config)
+            for row in driver.find_elements_by_css_selector(
+                    '.av-table-striped.syslog tr.ng-scope'):
+                protocol = row.find_element_by_id('txt-protocol').text
+                ip = row.find_element_by_id('txt-management').text
+                try:
+                    port = int(row.find_element_by_id('txt-port').text)
+                except:
+                    port = 0
+                packets = row.find_element_by_id('txt-packets').text
+                details[sensor.get('name')]['syslog'].append({
+                    'ip': ip, 'protocol': protocol,
+                    'port': port, 'packets': packets})
+
+        logger.info('Closing webdriver...')
+        driver.close()
     except Exception as exc:
         logger.info('Exception occured in code. Gracefully closing webdriver.')
         driver.close()
         alert_on_slack('> Unexpected exception occured.\n'
                        '*`%s`*' % (str(exc)), config)
+        logger.info(str(exc))
         return _exit(500, str(exc))
 
     return _exit(200, 'Everything executed smoothly.')
