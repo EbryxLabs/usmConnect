@@ -159,18 +159,26 @@ def do_login(driver, config):
     login_elem.click()
 
 
-def wait_for_element(driver, selector, timeout=30, count=1):
+def wait_for_element(driver, selector, timeout=30, state='visible', count=1):
 
     if count > 3:
         return {'exit': True}
 
     try:
-        WebDriverWait(driver, 30).until(
-            EC.visibility_of_element_located((
-                By.CSS_SELECTOR, selector)))
+        if state == 'visible':
+            WebDriverWait(driver, timeout).until(
+                EC.visibility_of_element_located((
+                    By.CSS_SELECTOR, selector)))
+
+        elif state == 'invisible':
+            WebDriverWait(driver, timeout).until(
+                EC.invisibility_of_element_located((
+                    By.CSS_SELECTOR, selector)))
     except TimeoutException:
         logger.info('Browser timed out while waiting...')
-        wait_for_element(driver, selector, timeout=timeout, count=count+1)
+        wait_for_element(
+            driver, selector, timeout=timeout,
+            state=state, count=count+1)
 
 
 def get_sensors(driver):
@@ -200,6 +208,7 @@ def main(event, context):
 
     config = read_config()
     if config.get('statusCode'):
+        logger.info(config)
         return config
 
     logger.info(str())
@@ -216,9 +225,9 @@ def main(event, context):
             desired_capabilities={'browserName': 'chrome'},
             options=options)
     except (NewConnectionError, MaxRetryError) as exc:
-        # alert_on_slack(
-        #     '> *Critical:* Could not connect to remote selenium '
-        #     'server: %s' % (config['selenium_host']), config)
+        message = 'Could not connect to remote selenium ' \
+            'server: %s' % (config['selenium_host'])
+        alert_on_slack('> *Critical:* ' + message, config)
         return _exit(500, str(exc))
 
     try:
@@ -226,8 +235,10 @@ def main(event, context):
         driver.get(config['usm_host_url'])
 
         if 'AlienVault' not in driver.title:
-            alert_on_slack('> Browser could not retrieve the '
-                           'main page of USM.', config)
+            message = 'Browser could not retrieve the ' \
+                'main page of USM.'
+            logger.info(message)
+            alert_on_slack('> ' + message, config)
             return _exit(400, 'Unexpected HTML page title at: %s' % (
                 config['usm_host_url']))
 
@@ -236,9 +247,49 @@ def main(event, context):
         logger.info('Waiting for dashboard...')
         res = wait_for_element(driver, 'av-header #header')
         if res and res.get('exit'):
-            alert_on_slack('> Browser timed out after 3rd retry '
-                           'of waiting for element.', config)
-            return _exit(400, 'Exiting program after 3rd retry...')
+            message = 'Browser timed out after 3rd retry ' \
+                'of waiting for element.'
+            logger.info(message)
+            alert_on_slack('> ' + message, config)
+
+        data = {'storage': dict()}
+        sub_link = driver.find_element_by_id('nav-link-my-subscription')
+        driver.get(sub_link.get_attribute('href'))
+
+        logger.info('Waiting for subscription page...')
+        res = wait_for_element(driver, '#status-my-subscription', timeout=20)
+        if res and res.get('exit'):
+            message = 'Browser timed out after 3rd retry ' \
+                'of waiting for element.'
+            logger.info(message)
+            alert_on_slack('> ' + message, config)
+        else:
+            logger.info('Waiting for subscription data to load...')
+            res = wait_for_element(
+                driver, 'loading #loading', timeout=15, state='invisible')
+            if res and res.get('exit'):
+                message = 'Browser timed out after 3rd retry ' \
+                    'of waiting for element.'
+                logger.info(message)
+                alert_on_slack('> ' + message, config)
+            else:
+
+                data['storage']['total'] = \
+                    driver.find_element_by_css_selector(
+                    '.free-space:nth-child(2) span.ng-binding:last-child') \
+                    .text
+                data['storage']['consumed'] = \
+                    driver.find_element_by_css_selector(
+                    '.free-space:nth-child(2) span.ng-binding:first-child') \
+                    .text
+                data['storage']['remaining'] = \
+                    driver.find_element_by_css_selector(
+                    '.free-space:nth-child(4) span.ng-binding:first-child') \
+                    .text
+                data['storage']['projected'] = \
+                    driver.find_element_by_css_selector(
+                    '.free-space:nth-child(6) span.ng-binding:first-child') \
+                    .text
 
         sensor_link = driver.find_element_by_css_selector('a#nav-link-sensors')
         logger.info('Visting sensors page link...')
@@ -247,19 +298,19 @@ def main(event, context):
         logger.info('Waiting for sensors page...')
         res = wait_for_element(driver, '#table-sensors-list', timeout=15)
         if res and res.get('exit'):
-            alert_on_slack('> Browser timed out after 3rd retry '
-                           'of waiting for element.', config)
-            return _exit(400, 'Exiting program after 3rd retry...')
+            message = 'Browser timed out after 3rd retry ' \
+                'of waiting for element.'
+            logger.info(message)
+            alert_on_slack('> ' + message, config)
 
         logger.info('Finding disconnected sensors from page...')
-        sensors = get_sensors(driver)
+        data['sensors'] = get_sensors(driver)
 
-        text = get_slack_text([x for x in sensors if x.get(
+        text = get_slack_text([x for x in data['sensors'] if x.get(
             'text', str()).lower() in ['connection lost']], config)
         alert_on_slack(text, config)
 
-        details = dict()
-        for sensor in sensors:
+        for sensor in data['sensors']:
             if not sensor.get('id') or sensor.get(
                     'text', str()).lower() in ['connection lost']:
                 continue
@@ -272,10 +323,14 @@ def main(event, context):
             res = wait_for_element(
                 driver, '.av-table-striped.checks', timeout=20)
             if res and res.get('exit'):
-                alert_on_slack('> Browser timed out after 3rd retry '
-                               'of waiting for element.', config)
+                message = 'Browser timed out after 3rd retry ' \
+                    'of waiting for element.'
+                logger.info(message)
+                alert_on_slack('> ' + message, config)
 
-            details[sensor.get('name')] = {'network': dict(), 'syslog': list()}
+            sensor['network'] = dict()
+            sensor['syslog'] = list()
+
             for row in driver.find_elements_by_css_selector(
                     '.av-table-striped.checks tr.ng-scope'):
                 desc = row.find_element_by_css_selector('.ng-binding').text
@@ -284,15 +339,19 @@ def main(event, context):
                 status = 'success' if 'success' in status else \
                     'error' if 'error' in status else status
 
-                details[sensor.get('name')]['network'][desc] = status
+                sensor['network'][desc] = status
 
             syslog_tab = driver.find_element_by_id('link-syslog-configuration')
             syslog_tab.click()
+
             res = wait_for_element(
                 driver, '.av-table-striped.syslog', timeout=10)
             if res and res.get('exit'):
-                alert_on_slack('> Browser timed out after 3rd retry '
-                               'of waiting for element.', config)
+                message = 'Browser timed out after 3rd retry ' \
+                    'of waiting for element.'
+                logger.info(message)
+                alert_on_slack('> ' + message, config)
+
             for row in driver.find_elements_by_css_selector(
                     '.av-table-striped.syslog tr.ng-scope'):
                 protocol = row.find_element_by_id('txt-protocol').text
@@ -302,7 +361,7 @@ def main(event, context):
                 except:
                     port = 0
                 packets = row.find_element_by_id('txt-packets').text
-                details[sensor.get('name')]['syslog'].append({
+                sensor['syslog'].append({
                     'ip': ip, 'protocol': protocol,
                     'port': port, 'packets': packets})
 
