@@ -252,7 +252,41 @@ def main(event, context):
             logger.info(message)
             alert_on_slack('> ' + message, config)
 
+        driver.find_element_by_css_selector(
+            'counter-nav-icon[counter-name="intercom"] '
+            '.counter-nav-icon-container').click()
+
+        logger.info('Waiting for intercom to appear...')
+        res = wait_for_element(
+            driver, 'iframe[title="Intercom live chat messenger"]', timeout=5)
+        if res and res.get('exit'):
+            message = 'Browser timed out after 3rd retry ' \
+                'of waiting for element.'
+            logger.info(message)
+            alert_on_slack('> ' + message, config)
+
+        iframe = driver.find_element_by_css_selector(
+            'iframe[title="Intercom live chat messenger"]')
+        driver.switch_to.frame(iframe)
+        logger.info('Switched to intercom iframe.')
+
+        selector = '.intercom-messenger-card-image' \
+            '.intercom-messenger-card-image-left + ' \
+            '.intercom-messenger-card-list-item-text'
+
+        logger.info('Waiting for status element...')
+        res = wait_for_element(driver, selector, timeout=10)
+        if res and res.get('exit'):
+            message = 'Browser timed out after 3rd retry ' \
+                'of waiting for element.'
+            logger.info(message)
+            alert_on_slack('> ' + message, config)
+
         data = {'storage': dict()}
+        data['status'] = driver.find_element_by_css_selector(selector).text
+        driver.switch_to.default_content()
+        logger.info('Switched back to default content.')
+
         sub_link = driver.find_element_by_id('nav-link-my-subscription')
         driver.get(sub_link.get_attribute('href'))
 
