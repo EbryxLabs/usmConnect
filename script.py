@@ -129,48 +129,91 @@ def get_usm_events(config, token, sensors):
         logger.info('Retrieving USM sensor events [%s]...', sensor.get('name'))
         res = requests.get(url, headers={'Authorization': 'Bearer ' + token})
         if res.status_code < 300:
-            sensor['events'] = [
-                x.get('timestamp_received_iso8601') for x in
-                res.json().get('_embedded', dict()).get(
-                    'eventResourceList', list())]
+            sensor['events'] = {
+                'timestamps': [
+                    x.get('timestamp_received_iso8601') for x in
+                    res.json().get('_embedded', dict()).get(
+                        'eventResourceList', list())
+                ]}
+            sensor['events']['count'] = res.json().get(
+                'page', dict()).get('totalElements', 0)
             logger.info('[%d] events fetched from '
                         'USM.', len(sensor['events']))
         else:
-            logger.info('  Unexpected response returned: %s', res)
+            logger.info('Unexpected response returned: %s', res)
 
 
 def get_slack_text(config, data):
 
-    prepared_string = str()
+    slack_text = str()
     logger.info(str())
-    logger.info('[%d] sensors are found to be disconnected.', len(data))
+
     if not config.get('slack_hooks', list()):
         logger.info('No webhook is specified. Skipping slack push.')
-        return prepared_string
-
+        return slack_text
     if not data:
         logger.info('No disconnected sensor detected. Skipping slack push.')
-        return prepared_string
+        return slack_text
 
-    for entry in data:
-        if not(entry.get('name') or entry.get('ip')):
+    disconns = [
+        x for x in data['sensors']
+        if 'connection lost' in x.get('text').lower()
+        if x.get('ip') not in config.get('whitelist', list())
+        if x.get('name') not in config.get('whitelist', list())]
+    logger.info('[%d] sensors are found to be disconnected.', len(disconns))
+    tick, cross = ':heavy_check_mark:', ':heavy_multiplication_x:'
+
+    symbol = tick if 'all systems operational' in data[
+        'status'].lower() else cross
+    slack_text += '*Status:*\n> %s %s\n\n' % (
+        symbol, data['status'].replace('Status: ', str()).split('\n')[0])
+
+    if not config.get('storage') and data.get('storage'):
+        slack_text += '*Storage:*\n> Consumed: *%s/%s*\n' \
+            '> Remaining: *%s*\n> Projected: *%s*\n' % (
+                data['storage']['consumed'], data['storage']['total'],
+                data['storage']['remaining'], data['storage']['projected'])
+
+    logger.info('Pushing status and storage details to slack...')
+    alert_on_slack(config, slack_text)
+    for sensor in data['sensors']:
+        slack_text = str()
+        if not(sensor.get('name') or sensor.get('ip')):
             continue
 
-        if entry.get('name') in config.get('whitelist', list()) or \
-                entry.get('ip') in config.get('whitelist', list()):
+        if sensor.get('name') in config.get('whitelist', list()) or \
+                sensor.get('ip') in config.get('whitelist', list()):
             continue
 
-        prepared_string += '> %s *(%s)*\n' % (
-            entry.get('ip', 'N/A'), entry.get('name', 'N/A'))
+        slack_text += '\n*(%s)* %s\n' % (
+            sensor.get('name', 'N/A'), sensor.get('ip', 'N/A'))
 
-    if prepared_string:
-        prepared_string = 'Following sensors are detected to be ' \
-            'disconnected from USM.\n' + prepared_string
-    else:
-        logger.info('Disconnected sensor(s) were whitelisted. '
-                    'Skipping slack push.')
+        symbol = cross if 'connection lost' in \
+            sensor.get('text').lower() else tick
+        slack_text += '> \t%s %s\n' % (symbol, sensor['text'])
 
-    return prepared_string
+        slack_text += '> \t*Events:*\n> \t\tTimestamp: *`%s`*\n' \
+            '> \t\tCount: *`%s`*\n' % ((sensor.get('events', dict()).get(
+                'timestamps', list()) or ['N/A'])[-1], sensor.get(
+                    'events', dict()).get('count', 0))
+
+        if sensor.get('network'):
+            slack_text += '> \t*Network:*\n'
+            for desc, status in sensor.get('network').items():
+                symbol = tick if 'success' in status.lower() else cross
+                slack_text += '> \t\t%s %s.\n' % (symbol, desc)
+
+        if sensor.get('syslog'):
+            slack_text += '> \t*Syslog:*\n'
+            for entry in sensor.get('syslog'):
+                symbol = tick if entry.get('packets') is not '0' else cross
+                slack_text += '> \t\t%s *%s* packets received.' \
+                    '\t*`%s:%s`*\n' % (
+                        symbol, entry.get('packets'),
+                        entry.get('protocol').split(' ')[-1], entry.get('port'))
+
+        logger.info('Pushing sensor (%s) details to slack...', sensor.get('name'))
+        alert_on_slack(config, slack_text)
 
 
 def alert_on_slack(config, text):
@@ -428,6 +471,8 @@ def main(event, context):
         return config
 
     logger.info(str())
+    print(get_slack_text(config, {}))
+    return
 
     options = Options()
     options.headless = True
@@ -485,9 +530,7 @@ def main(event, context):
         else:
             get_usm_events(config, token, data['sensors'])
 
-        # text = get_slack_text([x for x in data['sensors'] if x.get(
-        #     'text', str()).lower() in ['connection lost']], config)
-        # alert_on_slack(config, text)
+        get_slack_text(config, data)
 
     except Exception as exc:
         logger.info('Exception occured in code. Gracefully closing webdriver.')
