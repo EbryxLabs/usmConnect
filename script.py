@@ -275,7 +275,8 @@ def do_login(config, driver):
     login_elem.click()
 
 
-def wait_for_element(driver, selector, timeout=30, state='visible', count=1):
+def wait_for_element(driver, selector, timeout=30,
+                     state='visible', count=1, wait=0):
 
     if count > 3:
         return {'exit': True}
@@ -295,6 +296,8 @@ def wait_for_element(driver, selector, timeout=30, state='visible', count=1):
             WebDriverWait(driver, timeout).until(
                 EC.element_to_be_clickable((
                     By.CSS_SELECTOR, selector)))
+
+        time.sleep(wait) if wait else None
     except TimeoutException:
         logger.info('Browser timed out while waiting...')
         wait_for_element(
@@ -343,7 +346,8 @@ def get_system_status(config, driver):
 
     status = dict()
     logger.info('Waiting for intercom container to be clickable...')
-    wait_for_element(driver, '#nav-tab-container-intercom', state='clickable')
+    wait_for_element(driver, '#nav-tab-container-intercom',
+                     state='clickable', wait=3)
     driver.find_element_by_css_selector('#nav-tab-container-intercom').click()
 
     logger.info('Waiting for notification bubbles...')
