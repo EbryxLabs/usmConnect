@@ -288,6 +288,11 @@ def wait_for_element(driver, selector, timeout=30, state='visible', count=1):
             WebDriverWait(driver, timeout).until(
                 EC.invisibility_of_element_located((
                     By.CSS_SELECTOR, selector)))
+
+        elif state == 'clickable':
+            WebDriverWait(driver, timeout).until(
+                EC.element_to_be_clickable((
+                    By.CSS_SELECTOR, selector)))
     except TimeoutException:
         logger.info('Browser timed out while waiting...')
         wait_for_element(
@@ -334,9 +339,12 @@ def get_sensors_status(config, driver, skip_page=False):
 
 def get_system_status(config, driver):
 
-    driver.find_element_by_css_selector(
-        'counter-nav-icon[counter-name="intercom"] '
-        '.counter-nav-icon-container').click()
+    selector = 'counter-nav-icon[counter-name="intercom"] ' \
+        '.counter-nav-icon-container'
+
+    logger.info('Waiting for intercom container to be clickable...')
+    wait_for_element(driver, selector, state='clickable')
+    driver.find_element_by_css_selector(selector).click()
 
     logger.info('Waiting for intercom to appear...')
     res = wait_for_element(
