@@ -143,7 +143,7 @@ def get_usm_events(config, token, sensors):
             logger.info('Unexpected response returned: %s', res)
 
 
-def get_slack_text(config, data):
+def push_slack_text(config, data):
 
     slack_text = str()
     logger.info(str())
@@ -339,12 +339,9 @@ def get_sensors_status(config, driver, skip_page=False):
 
 def get_system_status(config, driver):
 
-    selector = 'counter-nav-icon[counter-name="intercom"] ' \
-        '.counter-nav-icon-container'
-
     logger.info('Waiting for intercom container to be clickable...')
-    wait_for_element(driver, selector, state='clickable')
-    driver.find_element_by_css_selector(selector).click()
+    wait_for_element(driver, '#nav-tab-intercom', state='clickable')
+    driver.find_element_by_css_selector('#nav-tab-intercom').click()
 
     logger.info('Waiting for intercom to appear...')
     res = wait_for_element(
@@ -544,7 +541,7 @@ def main(event, context):
         else:
             get_usm_events(config, token, data['sensors'])
 
-        get_slack_text(config, data)
+        push_slack_text(config, data)
 
     except Exception as exc:
         logger.info('Exception occured in code. Gracefully closing webdriver.')
