@@ -173,9 +173,17 @@ def get_slack_text(config, data):
             '> Remaining: *%s*\n> Projected: *%s*\n' % (
                 data['storage']['consumed'], data['storage']['total'],
                 data['storage']['remaining'], data['storage']['projected'])
+    elif not data.get('storage'):
+        slack_text += '*Storage:*\n' \
+            '> %s Details could not be retrieved.\n' % (cross)
 
     logger.info('Pushing status and storage details to slack...')
     alert_on_slack(config, slack_text)
+
+    if not data['sensors']:
+        slack_text += '*Sensors:*\n' \
+            '> %s Details could not be retrieved.\n' % (cross)
+
     for sensor in data['sensors']:
         slack_text = str()
         if not(sensor.get('name') or sensor.get('ip')):
@@ -192,7 +200,7 @@ def get_slack_text(config, data):
             sensor.get('text').lower() else tick
         slack_text += '> \t%s %s\n' % (symbol, sensor['text'])
 
-        slack_text += '> \t*Events:*\n> \t\tTimestamp: *`%s`*\n' \
+        slack_text += '> \t*Events:*\n> \t\tLatest: *`%s`*\n' \
             '> \t\tCount: *`%s`*\n' % ((sensor.get('events', dict()).get(
                 'timestamps', list()) or ['N/A'])[-1], sensor.get(
                     'events', dict()).get('count', 0))
@@ -202,6 +210,9 @@ def get_slack_text(config, data):
             for desc, status in sensor.get('network').items():
                 symbol = tick if 'success' in status.lower() else cross
                 slack_text += '> \t\t%s %s.\n' % (symbol, desc)
+        else:
+            slack_text += '> \t*Network:*\n' \
+                '> \t\t%s Details could not be retrieved.\n' % (cross)
 
         if sensor.get('syslog'):
             slack_text += '> \t*Syslog:*\n'
@@ -209,10 +220,14 @@ def get_slack_text(config, data):
                 symbol = tick if entry.get('packets') is not '0' else cross
                 slack_text += '> \t\t%s *%s* packets received.' \
                     '\t*`%s:%s`*\n' % (
-                        symbol, entry.get('packets'),
-                        entry.get('protocol').split(' ')[-1], entry.get('port'))
+                        symbol, entry.get('packets'), entry.get(
+                            'protocol').split(' ')[-1], entry.get('port'))
+        else:
+            slack_text += '> \t*Syslog:*\n' \
+                '> \t\t%s Details could not be retrieved.\n' % (cross)
 
-        logger.info('Pushing sensor (%s) details to slack...', sensor.get('name'))
+        logger.info('Pushing sensor (%s) details to '
+                    'slack...', sensor.get('name'))
         alert_on_slack(config, slack_text)
 
 
@@ -296,13 +311,11 @@ def get_sensors_status(config, driver, skip_page=False):
             message = 'Browser timed out after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
-            alert_on_slack(config, '> ' + message)
+            return sensors
 
     logger.info('Finding disconnected sensors from page...')
-    sensor_rows = driver.find_elements_by_css_selector(
-        '#table-sensors-list tr.result-row')
-
-    for row in sensor_rows:
+    for row in driver.find_elements_by_css_selector(
+            '#table-sensors-list tr.result-row'):
         try:
             _id = row.get_attribute('id').replace('result-row-', str())
             text = row.find_element_by_css_selector(
@@ -332,7 +345,6 @@ def get_system_status(config, driver):
         message = 'Browser timed out after 3rd retry ' \
             'of waiting for element.'
         logger.info(message)
-        alert_on_slack(config, '> ' + message)
 
     iframe = driver.find_element_by_css_selector(
         'iframe[title="Intercom live chat messenger"]')
@@ -349,7 +361,6 @@ def get_system_status(config, driver):
         message = 'Browser timed out after 3rd retry ' \
             'of waiting for element.'
         logger.info(message)
-        alert_on_slack(config, '> ' + message)
 
     status = driver.find_element_by_css_selector(selector).text
     driver.switch_to.default_content()
@@ -369,7 +380,6 @@ def get_subscription_details(config, driver):
         message = 'Browser timed out after 3rd retry ' \
             'of waiting for element.'
         logger.info(message)
-        alert_on_slack(config, '> ' + message)
         return storage
 
     else:
@@ -380,7 +390,6 @@ def get_subscription_details(config, driver):
             message = 'Browser timed out after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
-            alert_on_slack(config, '> ' + message)
             return storage
         else:
 
@@ -416,14 +425,13 @@ def populate_sensor_details(config, driver, sensors):
         logger.info('Visiting sensor page [%s]...', sensor.get('name'))
         driver.get(url)
 
-        logger.info('Waiting for settings table...')
+        logger.info('Waiting for network table...')
         res = wait_for_element(
             driver, '.av-table-striped.checks', timeout=20)
         if res and res.get('exit'):
             message = 'Browser timed out after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
-            alert_on_slack(config, '> ' + message)
 
         sensor['network'] = dict()
         sensor['syslog'] = list()
@@ -441,13 +449,13 @@ def populate_sensor_details(config, driver, sensors):
         syslog_tab = driver.find_element_by_id('link-syslog-configuration')
         syslog_tab.click()
 
+        logger.info('Waiting for syslog table...')
         res = wait_for_element(
             driver, '.av-table-striped.syslog', timeout=10)
         if res and res.get('exit'):
             message = 'Browser timed out after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
-            alert_on_slack(config, '> ' + message)
 
         for row in driver.find_elements_by_css_selector(
                 '.av-table-striped.syslog tr.ng-scope'):
@@ -471,8 +479,6 @@ def main(event, context):
         return config
 
     logger.info(str())
-    print(get_slack_text(config, {}))
-    return
 
     options = Options()
     options.headless = True
