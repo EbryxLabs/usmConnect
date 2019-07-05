@@ -164,9 +164,11 @@ def push_slack_text(config, data):
     tick, cross = ':heavy_check_mark:', ':heavy_multiplication_x:'
 
     symbol = tick if 'all systems operational' in data[
-        'status'].lower() else cross
-    slack_text += '*Status:*\n> %s %s\n\n' % (
-        symbol, data['status'].replace('Status: ', str()).split('\n')[0])
+        'status'].get('text').lower() else cross
+    slack_text += '*Status:*\n> %s %s (%s)\n\n' % (
+        symbol, data['status'].get('text', str()).replace(
+            'Status: ', str()).split('\n')[0], data['status'].get(
+                'notices', str()))
 
     if not config.get('storage') and data.get('storage'):
         slack_text += '*Storage:*\n> Consumed: *%s/%s*\n' \
@@ -339,9 +341,19 @@ def get_sensors_status(config, driver, skip_page=False):
 
 def get_system_status(config, driver):
 
+    status = dict()
     logger.info('Waiting for intercom container to be clickable...')
-    wait_for_element(driver, '#nav-tab-intercom', state='clickable')
-    driver.find_element_by_css_selector('#nav-tab-intercom').click()
+    wait_for_element(driver, '#nav-tab-container-intercom', state='clickable')
+    driver.find_element_by_css_selector('#nav-tab-container-intercom').click()
+
+    logger.info('Waiting for notification bubbles...')
+    selector = '.counter-nav-icon-counter .counter-nav-icon-counter-circle'
+    res = wait_for_element(driver, selector, count=3)
+    if res and res.get('exit'):
+        logger.info('No notice bubbles found.')
+    else:
+        notice_bubble = driver.find_element_by_css_selector(selector)
+        status['notices'] = '%s notifications.' % (notice_bubble.text)
 
     logger.info('Waiting for intercom to appear...')
     res = wait_for_element(
@@ -367,7 +379,7 @@ def get_system_status(config, driver):
             'of waiting for element.'
         logger.info(message)
 
-    status = driver.find_element_by_css_selector(selector).text
+    status['text'] = driver.find_element_by_css_selector(selector).text
     driver.switch_to.default_content()
     logger.info('Switched back to default content.')
     return status
