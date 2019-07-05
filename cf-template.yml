@@ -23,6 +23,9 @@ Parameters:
   ConfigFile:
     Type: String
     Description: S3 public path to config file.
+  KMSKeyArn:
+    Type: String
+    Description: ARN of KMS key to use for encryption with lambda.
   SubnetIDs:
     Type: List<AWS::EC2::Subnet::Id>
     Description: List of Subnet Ids to attach lambda to.
@@ -63,51 +66,11 @@ Resources:
                   - 'ec2:DeleteNetworkInterface'
                   - 'ec2:DescribeNetworkInterfaces'
                 Resource: '*'
-  KMSKeyInstance:
-    Type: 'AWS::KMS::Key'
-    Properties:
-      Description: !Join 
-        - ''
-        - - 'A key to encrypt environment variables of lambda: '
-          - !Ref LambdaName
-      KeyPolicy:
-        Version: 2012-10-17
-        Id: key-default-1
-        Statement:
-          - Sid: Allow administration of the key
-            Effect: Allow
-            Principal:
-              AWS:
-                - !Join 
-                  - ''
-                  - - 'arn:aws:iam::'
-                    - !Ref 'AWS::AccountId'
-                    - ':role/'
-                    - !Join 
-                      - ''
-                      - - !Ref LambdaName
-                        - '-role'
-                - !Join 
-                  - ''
-                  - - 'arn:aws:iam::'
-                    - !Ref 'AWS::AccountId'
-                    - ':root'
-            Action:
-              - 'kms:*'
-            Resource: '*'
-    DependsOn:
-      - IAMRoleInstance
-  KMSKeyAliasInstance:
-    Type: 'AWS::KMS::Alias'
-    Properties:
-      AliasName: !Join
-        - ''
-        - - 'alias/'
-          - !Ref LambdaName
-          - '-key'
-      TargetKeyId: !Ref KMSKeyInstance
-    DependsOn:
-      - KMSKeyInstance
+              - Effect: Allow
+                Action:
+                  - 'kms:Encrypt'
+                  - 'kms:Decrypt'
+                Resource: !Ref KMSKeyArn
   LambdaInstance:
     Type: 'AWS::Lambda::Function'
     Properties:
@@ -133,16 +96,13 @@ Resources:
       Handler: script.main
       Runtime: python3.6
       MemorySize: 128
-      Timeout: '30'
-      KmsKeyArn: !GetAtt 
-        - KMSKeyInstance
-        - Arn
+      Timeout: '200'
+      KmsKeyArn: !Ref KMSKeyArn
       VpcConfig:
         SubnetIds: !Ref SubnetIDs
         SecurityGroupIds: !Ref SecurityGroupIDs
     DependsOn:
       - IAMRoleInstance
-      - KMSKeyInstance
   CloudWatchEvent:
     Type: 'AWS::Events::Rule'
     Properties:
@@ -192,11 +152,6 @@ Outputs:
     Description: Name of attached role to AWS Lambda function.
     Value: !GetAtt 
       - IAMRoleInstance
-      - Arn
-  LambdaAttachedKMSKey:
-    Description: Name of attached KMS Key to AWS Lambda function.
-    Value: !GetAtt 
-      - KMSKeyInstance
       - Arn
   CloudWatchRule:
     Description: Name of CloudWatch rule attached to AWS Lambda function.
