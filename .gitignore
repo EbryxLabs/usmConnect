@@ -5,3 +5,4 @@ _keys
 *.json.enc
 *.log
 *.zip
+info.data*
