@@ -2,6 +2,7 @@ import os
 import stat
 import time
 import json
+import boto3
 import zipfile
 import logging
 from urllib.parse import urljoin
@@ -93,6 +94,72 @@ def validate_config(config):
 
     if not config['selenium_host'].startswith(('http', 'https')):
         config['selenium_host'] = 'http://127.0.0.1:4444/wd/hub'
+
+
+def get_data_file():
+
+    if not os.environ.get('S3_DATA_FILE'):
+        message = 'No S3_DATA_FILE environment variable exists.'
+        return _exit(404, message)
+
+    filepath = os.environ['S3_DATA_FILE']
+    if filepath.startswith('file:///'):
+        data_filename = filepath.split('file:///')[-1]
+        logger.info('Fetching data file from filesystem: %s', data_filename)
+        if not os.path.isfile(data_filename):
+            return _exit(404, 'DATA file not found: %s' % (data_filename))
+
+        data = open(data_filename, 'r').read()
+        if data:
+            try:
+                return json.loads(data)
+            except json.JSONDecodeError as exc:
+                return _exit(500, str(exc))
+        else:
+            return dict()
+
+    elif filepath.startswith('s3://'):
+        bucket_name = filepath.replace('s3://', str()).split('/')[0]
+        object_key = '/'.join(filepath.replace('s3://', str()).split('/')[1:])
+    else:
+        bucket_name = filepath.split('/')[0]
+        object_key = '/'.join(filepath.split('/')[1:])
+
+    logger.info('Fetching data file via S3: [%s][%s]', bucket_name, object_key)
+    s3_client = boto3.client('s3')
+    response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
+    data = response.get('Body').read().decode('utf8')
+    if data:
+        try:
+            return json.loads(data)
+        except json.JSONDecodeError as exc:
+            message = 'Error decoding S3 data file as JSON: ' + str(exc)
+            return _exit(500, message)
+    else:
+        return dict()
+
+
+def update_data_file(content):
+
+    filepath = os.environ['S3_DATA_FILE']
+    if filepath.startswith('file:///'):
+        data_filename = filepath.split('file:///')[-1]
+        logger.info('Updating data file onto filesystem: %s', data_filename)
+        json.dump(content, open(data_filename, 'w'))
+        return
+
+    elif filepath.startswith('s3://'):
+        bucket_name = filepath.replace('s3://', str()).split('/')[0]
+        object_key = '/'.join(filepath.replace('s3://', str()).split('/')[1:])
+
+    else:
+        bucket_name = filepath.split('/')[0]
+        object_key = '/'.join(filepath.split('/')[1:])
+
+    logger.info('Updating data file on S3: [%s][%s]', bucket_name, object_key)
+    s3_client = boto3.client('s3')
+    body = json.dumps(content).encode('utf8')
+    s3_client.put_object(Body=body, Bucket=bucket_name, Key=object_key)
 
 
 def get_auth_token(config):
@@ -193,6 +260,12 @@ def push_slack_text(config, data):
 
         if sensor.get('name') in config.get('whitelist', list()) or \
                 sensor.get('ip') in config.get('whitelist', list()):
+            logger.info('Whitelisted sensor (%s).', sensor.get('name'))
+            continue
+
+        if len(sensor.keys()) == 3:
+            logger.info('Skipping sensor (%s) as there\'s '
+                        'nothing to report', sensor.get('name'))
             continue
 
         slack_text += '\n*(%s)* %s\n' % (
@@ -492,12 +565,59 @@ def populate_sensor_details(config, driver, sensors):
                 'port': port, 'packets': packets})
 
 
+def check_diff(data, old_data):
+
+    if isinstance(data, dict) and isinstance(old_data, dict):
+        for key, value in data.copy().items():
+            if key not in old_data:
+                continue
+            if isinstance(value, dict):
+                data[key] = check_diff(value, old_data[key])
+                data.pop(key) if not data[key] else None
+            if isinstance(value, list):
+                data[key] = check_diff(value, old_data[key])
+                data.pop(key) if not data[key] else None
+
+            if key == 'text' and value == old_data[key]:
+                data.pop(key)
+                continue
+            if data.get('id') and old_data.get('id'):
+                continue
+
+            if isinstance(value, str) or isinstance(
+                    value, int) or isinstance(value, float):
+                data.pop(key) if value == old_data.get(key) else None
+        return data
+
+    if isinstance(data, list) and isinstance(old_data, list):
+        try:
+            _list = list(set(data) - set(old_data))
+        except TypeError:
+            _list = data
+
+        for idx, item in enumerate(_list[:]):
+            if isinstance(item, dict):
+                for _id in ['id', 'protocol']:
+                    for old_item in old_data:
+                        if isinstance(old_item, dict) and old_item.get(
+                               _id) == item.get(_id):
+                            _list[idx] = check_diff(item, old_item)
+
+        _list = [x for x in _list if x]
+        return _list
+
+
 def main(event, context):
 
     config = read_config()
     if config.get('statusCode'):
         logger.info(config)
         return config
+
+    content = get_data_file()
+    if content.get('statusCode'):
+        logger.info(content)
+        return content
 
     logger.info(str())
 
@@ -557,7 +677,10 @@ def main(event, context):
         else:
             get_usm_events(config, token, data['sensors'])
 
-        push_slack_text(config, data)
+        logger.info('Checking diff between old state of USM...')
+        filtered_data = check_diff(data, content)
+        push_slack_text(config, filtered_data)
+        update_data_file(data)
 
     except Exception as exc:
         logger.info('Exception occured in code. Gracefully closing webdriver.')
@@ -573,3 +696,115 @@ def main(event, context):
 if __name__ == "__main__":
 
     main({}, {})
+    # data = {
+    #     "status": {
+    #         "notices": "1 notifications.",
+    #         "text": "Status: All Systems Operational\nUpdated Jul 3, 18:05 UTC"
+    #     },
+    #     "storage": {
+    #         "total": "250 GB",
+    #         "consumed": "43.4 GB",
+    #         "remaining": "206.6 GB",
+    #         "projected": "269.0 GB"
+    #     },
+    #     "sensors": [
+    #         {
+    #             "id": "eef01f3b-57b8-7032-c4d9-7e4e6bcb277f",
+    #             "name": "Test-Sensor",
+    #             "text": "Connection lost",
+    #             "ip": "192.168.10.140",
+    #             "events": {
+    #                 "timestamps": [],
+    #                 "count": 0
+    #             }
+    #         },
+    #         {
+    #             "id": "2064000c-f61c-478f-a5cc-da11b7393bc8",
+    #             "name": "Azure-Sensor",
+    #             "text": "Ready",
+    #             "ip": "172.16.183.12",
+    #             "network": {
+    #                 "Number of network interfaces ok": "success",
+    #                 "Gateway 172.16.183.1 is unreachable": "error",
+    #                 "DNS server 168.63.129.16 is unreachable": "error"
+    #             },
+    #             "syslog": [
+    #                 {
+    #                     "ip": "172.16.183.12",
+    #                     "protocol": "Syslog UDP",
+    #                     "port": 514,
+    #                     "packets": "15,549"
+    #                 },
+    #                 {
+    #                     "ip": "172.16.183.12",
+    #                     "protocol": "Syslog TLS",
+    #                     "port": 6514,
+    #                     "packets": "0"
+    #                 }
+    #             ],
+    #             "events": {
+    #                 "timestamps": [
+    #                     "2019-07-05T12:38:49.219Z",
+    #                 ],
+    #                 "count": 278
+    #             }
+    #         }
+    #     ]
+    # }
+
+    # old_data = {
+    #     "status": {
+    #         "notices": "2 notifications.",
+    #         "text": "Status: All Systems Operational\nUpdated Jul 3, 18:05 UTC"
+    #     },
+    #     "storage": {
+    #         "total": "250 GB",
+    #         "consumed": "43.4 GB",
+    #         "remaining": "206.6 GB",
+    #         "projected": "269.0 GB"
+    #     },
+    #     "sensors": [
+    #         {
+    #             "id": "eef01f3b-57b8-7032-c4d9-7e4e6bcb277f",
+    #             "name": "Test-Sensor",
+    #             "text": "Connection lost",
+    #             "ip": "192.168.10.140",
+    #             "events": {
+    #                 "timestamps": [],
+    #                 "count": 0
+    #             }
+    #         },
+    #         {
+    #             "id": "2064000c-f61c-478f-a5cc-da11b7393bc8",
+    #             "name": "Azure-Sensor",
+    #             "text": "Ready",
+    #             "ip": "172.16.183.12",
+    #             "network": {
+    #                 "Number of network interfaces ok": "success",
+    #                 "Gateway 172.16.183.1 is unreachable": "error",
+    #                 "DNS server 168.63.129.16 is unreachable": "error"
+    #             },
+    #             "syslog": [
+    #                 {
+    #                     "ip": "172.16.183.12",
+    #                     "protocol": "Syslog UDP",
+    #                     "port": 514,
+    #                     "packets": "15,549"
+    #                 },
+    #                 {
+    #                     "ip": "172.16.183.12",
+    #                     "protocol": "Syslog TLS",
+    #                     "port": 6514,
+    #                     "packets": "0"
+    #                 }
+    #             ],
+    #             "events": {
+    #                 "timestamps": [
+    #                     "2019-07-05T12:38:49.219Z",
+    #                 ],
+    #                 "count": 276
+    #             }
+    #         }
+    #     ]
+    # }
+    # print(json.dumps(check_diff(data, old_data), indent=2))
