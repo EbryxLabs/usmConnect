@@ -2,6 +2,7 @@ import os
 import stat
 import time
 import json
+import copy
 import boto3
 import zipfile
 import logging
@@ -107,7 +108,8 @@ def get_data_file():
         data_filename = filepath.split('file:///')[-1]
         logger.info('Fetching data file from filesystem: %s', data_filename)
         if not os.path.isfile(data_filename):
-            return _exit(404, 'DATA file not found: %s' % (data_filename))
+            open(data_filename, 'w')
+            return dict()
 
         data = open(data_filename, 'r').read()
         if data:
@@ -145,7 +147,7 @@ def update_data_file(content):
     if filepath.startswith('file:///'):
         data_filename = filepath.split('file:///')[-1]
         logger.info('Updating data file onto filesystem: %s', data_filename)
-        json.dump(content, open(data_filename, 'w'))
+        json.dump(content, open(data_filename, 'w'), indent=2)
         return
 
     elif filepath.startswith('s3://'):
@@ -185,7 +187,7 @@ def get_usm_events(config, token, sensors):
         'sensor_interval', '60')) * 60 * 1000))
     params = ['sort=timestamp_occured,desc',
               'timestamp_occured_gte=' + prev_time,
-              'size=5']
+              'size=3']
 
     for sensor in sensors:
         if not sensor.get('id'):
@@ -224,18 +226,19 @@ def push_slack_text(config, data):
 
     disconns = [
         x for x in data['sensors']
-        if 'connection lost' in x.get('text').lower()
+        if x.get('text') and 'connection lost' in x.get('text').lower()
         if x.get('ip') not in config.get('whitelist', list())
         if x.get('name') not in config.get('whitelist', list())]
     logger.info('[%d] sensors are found to be disconnected.', len(disconns))
     tick, cross = ':heavy_check_mark:', ':heavy_multiplication_x:'
 
-    symbol = tick if 'all systems operational' in data[
-        'status'].get('text').lower() else cross
-    slack_text += '*Status:*\n> %s %s (%s)\n\n' % (
-        symbol, data['status'].get('text', str()).replace(
-            'Status: ', str()).split('\n')[0], data['status'].get(
-                'notices', str()))
+    if data.get('status', dict()).get('text'):
+        symbol = tick if 'all systems operational' in data[
+            'status'].get('text', str()).lower() else cross
+        slack_text += '*Status:*\n> %s %s (%s)\n\n' % (
+            symbol, data['status'].get('text', str()).replace(
+                'Status: ', str()).split('\n')[0], data['status'].get(
+                    'notices', str()))
 
     if not config.get('storage') and data.get('storage'):
         slack_text += '*Storage:*\n> Consumed: *%s/%s*\n' \
@@ -271,33 +274,38 @@ def push_slack_text(config, data):
         slack_text += '\n*(%s)* %s\n' % (
             sensor.get('name', 'N/A'), sensor.get('ip', 'N/A'))
 
-        symbol = cross if 'connection lost' in \
-            sensor.get('text').lower() else tick
-        slack_text += '> \t%s %s\n' % (symbol, sensor['text'])
+        if sensor.get('text'):
+            symbol = cross if 'connection lost' in \
+                sensor.get('text', str()).lower() else tick
+            slack_text += '> \t%s %s\n' % (symbol, sensor['text'])
 
-        slack_text += '> \t*Events:*\n> \t\tLatest: *`%s`*\n' \
-            '> \t\tCount: *`%s`*\n' % ((sensor.get('events', dict()).get(
-                'timestamps', list()) or ['N/A'])[-1], sensor.get(
-                    'events', dict()).get('count', 0))
+        if sensor.get('events'):
+            slack_text += '> \t*Events:*\n> \t\tLatest: *`%s`*\n' \
+                '> \t\tCount: *`%s`*\n' % ((sensor.get('events', dict()).get(
+                    'timestamps', list()) or ['N/A'])[-1], sensor.get(
+                        'events', dict()).get('count', 0))
 
         if sensor.get('network'):
             slack_text += '> \t*Network:*\n'
             for desc, status in sensor.get('network').items():
                 symbol = tick if 'success' in status.lower() else cross
                 slack_text += '> \t\t%s %s.\n' % (symbol, desc)
-        else:
+        elif sensor.get('_network'):
             slack_text += '> \t*Network:*\n' \
                 '> \t\t%s Details could not be retrieved.\n' % (cross)
 
         if sensor.get('syslog'):
             slack_text += '> \t*Syslog:*\n'
             for entry in sensor.get('syslog'):
+                if not entry:
+                    continue
                 symbol = tick if entry.get('packets') is not '0' else cross
                 slack_text += '> \t\t%s *%s* packets received.' \
                     '\t*`%s:%s`*\n' % (
                         symbol, entry.get('packets'), entry.get(
-                            'protocol').split(' ')[-1], entry.get('port'))
-        else:
+                            'protocol', str()).split(' ')[-1],
+                        entry.get('port'))
+        elif sensor.get('_syslog'):
             slack_text += '> \t*Syslog:*\n' \
                 '> \t\t%s Details could not be retrieved.\n' % (cross)
 
@@ -455,10 +463,11 @@ def get_system_status(config, driver):
         message = 'Browser timed out after 3rd retry ' \
             'of waiting for element.'
         logger.info(message)
-
-    status['text'] = driver.find_element_by_css_selector(selector).text
-    driver.switch_to.default_content()
-    logger.info('Switched back to default content.')
+        status['text'] = 'Could not retrieve status from USM.'
+    else:
+        status['text'] = driver.find_element_by_css_selector(selector).text
+        driver.switch_to.default_content()
+        logger.info('Switched back to default content.')
     return status
 
 
@@ -514,11 +523,15 @@ def populate_sensor_details(config, driver, sensors):
                 'text', str()).lower() in ['connection lost']:
             continue
 
+        if sensor.get('name') in config.get('whitelist', list()):
+            continue
+
         url = config['usm']['host_url'] + \
             '/#/sensor/%s' % (sensor.get('id'))
         logger.info('Visiting sensor page [%s]...', sensor.get('name'))
         driver.get(url)
 
+        sensor['network'], sensor['syslog'] = dict(), list()
         logger.info('Waiting for network table...')
         res = wait_for_element(
             driver, '.av-table-striped.checks', timeout=20)
@@ -526,9 +539,7 @@ def populate_sensor_details(config, driver, sensors):
             message = 'Browser timed out after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
-
-        sensor['network'] = dict()
-        sensor['syslog'] = list()
+            status['_network'] = True
 
         for row in driver.find_elements_by_css_selector(
                 '.av-table-striped.checks tr.ng-scope'):
@@ -550,6 +561,7 @@ def populate_sensor_details(config, driver, sensors):
             message = 'Browser timed out after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
+            sensor['_syslog'] = True
 
         for row in driver.find_elements_by_css_selector(
                 '.av-table-striped.syslog tr.ng-scope'):
@@ -568,8 +580,15 @@ def populate_sensor_details(config, driver, sensors):
 def check_diff(data, old_data):
 
     if isinstance(data, dict) and isinstance(old_data, dict):
+
+        if data.get('packets') and old_data.get('packets') and \
+                data.get('packets') != old_data.get('packets'):
+            return data
+        if data.get('consumed') and old_data.get('consumed'):
+            return data
+
         for key, value in data.copy().items():
-            if key not in old_data:
+            if key not in old_data or key.startswith('_'):
                 continue
             if isinstance(value, dict):
                 data[key] = check_diff(value, old_data[key])
@@ -578,12 +597,10 @@ def check_diff(data, old_data):
                 data[key] = check_diff(value, old_data[key])
                 data.pop(key) if not data[key] else None
 
-            if key == 'text' and value == old_data[key]:
-                data.pop(key)
-                continue
             if data.get('id') and old_data.get('id'):
+                if key == 'text' and value == old_data.get(key):
+                    data.pop(key)
                 continue
-
             if isinstance(value, str) or isinstance(
                     value, int) or isinstance(value, float):
                 data.pop(key) if value == old_data.get(key) else None
@@ -667,9 +684,15 @@ def main(event, context):
         data['sensors'] = get_sensors_status(config, driver)
         populate_sensor_details(config, driver, data['sensors'])
 
-        logger.info('Closing webdriver...')
+    except Exception as exc:
         driver.close()
+        logger.info('Exception occured in code.')
+        alert_on_slack(config, '> Unexpected exception occured.\n'
+                       '```%s```' % (str(exc)))
+        logger.info(str(exc))
+        return _exit(500, str(exc))
 
+    try:
         token = get_auth_token(config)
         if not token:
             logger.info('Could not retrieve OAUTH token for '
@@ -678,15 +701,14 @@ def main(event, context):
             get_usm_events(config, token, data['sensors'])
 
         logger.info('Checking diff between old state of USM...')
-        filtered_data = check_diff(data, content)
+        filtered_data = check_diff(copy.deepcopy(data), content)
         push_slack_text(config, filtered_data)
         update_data_file(data)
 
     except Exception as exc:
-        logger.info('Exception occured in code. Gracefully closing webdriver.')
-        driver.close()
+        logger.info('Exception occured in code.')
         alert_on_slack(config, '> Unexpected exception occured.\n'
-                       '*`%s`*' % (str(exc)))
+                       '```%s```' % (str(exc)))
         logger.info(str(exc))
         return _exit(500, str(exc))
 
@@ -696,115 +718,3 @@ def main(event, context):
 if __name__ == "__main__":
 
     main({}, {})
-    # data = {
-    #     "status": {
-    #         "notices": "1 notifications.",
-    #         "text": "Status: All Systems Operational\nUpdated Jul 3, 18:05 UTC"
-    #     },
-    #     "storage": {
-    #         "total": "250 GB",
-    #         "consumed": "43.4 GB",
-    #         "remaining": "206.6 GB",
-    #         "projected": "269.0 GB"
-    #     },
-    #     "sensors": [
-    #         {
-    #             "id": "eef01f3b-57b8-7032-c4d9-7e4e6bcb277f",
-    #             "name": "Test-Sensor",
-    #             "text": "Connection lost",
-    #             "ip": "192.168.10.140",
-    #             "events": {
-    #                 "timestamps": [],
-    #                 "count": 0
-    #             }
-    #         },
-    #         {
-    #             "id": "2064000c-f61c-478f-a5cc-da11b7393bc8",
-    #             "name": "Azure-Sensor",
-    #             "text": "Ready",
-    #             "ip": "172.16.183.12",
-    #             "network": {
-    #                 "Number of network interfaces ok": "success",
-    #                 "Gateway 172.16.183.1 is unreachable": "error",
-    #                 "DNS server 168.63.129.16 is unreachable": "error"
-    #             },
-    #             "syslog": [
-    #                 {
-    #                     "ip": "172.16.183.12",
-    #                     "protocol": "Syslog UDP",
-    #                     "port": 514,
-    #                     "packets": "15,549"
-    #                 },
-    #                 {
-    #                     "ip": "172.16.183.12",
-    #                     "protocol": "Syslog TLS",
-    #                     "port": 6514,
-    #                     "packets": "0"
-    #                 }
-    #             ],
-    #             "events": {
-    #                 "timestamps": [
-    #                     "2019-07-05T12:38:49.219Z",
-    #                 ],
-    #                 "count": 278
-    #             }
-    #         }
-    #     ]
-    # }
-
-    # old_data = {
-    #     "status": {
-    #         "notices": "2 notifications.",
-    #         "text": "Status: All Systems Operational\nUpdated Jul 3, 18:05 UTC"
-    #     },
-    #     "storage": {
-    #         "total": "250 GB",
-    #         "consumed": "43.4 GB",
-    #         "remaining": "206.6 GB",
-    #         "projected": "269.0 GB"
-    #     },
-    #     "sensors": [
-    #         {
-    #             "id": "eef01f3b-57b8-7032-c4d9-7e4e6bcb277f",
-    #             "name": "Test-Sensor",
-    #             "text": "Connection lost",
-    #             "ip": "192.168.10.140",
-    #             "events": {
-    #                 "timestamps": [],
-    #                 "count": 0
-    #             }
-    #         },
-    #         {
-    #             "id": "2064000c-f61c-478f-a5cc-da11b7393bc8",
-    #             "name": "Azure-Sensor",
-    #             "text": "Ready",
-    #             "ip": "172.16.183.12",
-    #             "network": {
-    #                 "Number of network interfaces ok": "success",
-    #                 "Gateway 172.16.183.1 is unreachable": "error",
-    #                 "DNS server 168.63.129.16 is unreachable": "error"
-    #             },
-    #             "syslog": [
-    #                 {
-    #                     "ip": "172.16.183.12",
-    #                     "protocol": "Syslog UDP",
-    #                     "port": 514,
-    #                     "packets": "15,549"
-    #                 },
-    #                 {
-    #                     "ip": "172.16.183.12",
-    #                     "protocol": "Syslog TLS",
-    #                     "port": 6514,
-    #                     "packets": "0"
-    #                 }
-    #             ],
-    #             "events": {
-    #                 "timestamps": [
-    #                     "2019-07-05T12:38:49.219Z",
-    #                 ],
-    #                 "count": 276
-    #             }
-    #         }
-    #     ]
-    # }
-    # print(json.dumps(check_diff(data, old_data), indent=2))
