@@ -7,6 +7,7 @@ You can deploy the project using cloudformation but it assumes the following arc
 - A deployment package archive placed on S3 bucket.
 - AESIV & AESKEY used for encrypting the config file.
 - Accessible URI to encrypted config file.
+- Path to S3 file, or local file, to store history of USM state.
 - Private subnets to deploy lambda on a AWS VPC having a NAT Gateway for outgoing internet access.
 - Security Group to attach lambda with allowing traffic to EC2 machine hosting selenium server and allowing all outgoing traffic.
 
@@ -39,21 +40,37 @@ See more information about accessing internal resources from lambda [here.](http
 A sample configuration file is shown below:
 ```
 {
-  "usm_host_url": "<usm-console-url>",
-  "usm_username": "<usm-username>",
-  "usm_password": "<usm-password>",
-  "selenium_host": "<selenium-remote-server>",
+  "usm": {
+    "host_url": "<usm-console-url>",
+    "username": "<usm-console-username>",
+    "password": "<usm-console-password>"
+    "api_url": "<usm-console-url>/api/2.0/",
+    "client_id": "<usm-api-client-id>",
+    "client_secret": "<usm-api-client-secret>",
+    "sensor_interval": <interval-in-secs>
+  },
+  "selenium_host": "<selenium-remote-server-endpoint>",
   "whitelist": ["Sensor-1", ...],
   "slack_hooks": ["<hook-1-url>", ...]
 }
 ```
-**`usm_host_url`**, **`usm_username`** and **`usm_password`** are the url of USM console, username and password to authenticate respectively. **`selenium_host`** is the endpoint of selenium server that it expects the connections to be made at. For example, if your code and server at running locally, the default endpoint exposed by selenium server is `http://127.0.0.1:4444/wd/hub`  
+**`host_url`**, **`username`** and **`password`** in **`usm`** section are the url of USM console, username and password to authenticate respectively.  
+**`api_url`**, **`client_id`** and **`client_secret`** are endpoint for API of USM, id of api client and secret of api client resepctively. 
+**`sensor_interval`** is number, in seconds, to fetch the sensor events for.  
+**`selenium_host`** is the endpoint of selenium server that it expects the connections to be made at. For example, if your code and server at running locally, the default endpoint exposed by selenium server is `http://127.0.0.1:4444/wd/hub`  
 Depending upon the internal IP of EC2 machine and the port you exposed while starting the selenium server, your endpoint should be: `http://<EC2-internal-IP>:<PORT>/wd/hub`  
 **`whitelist`** is a list of sensor names or IP to whitelist them from program. You won't get any alert for whitelisted sensors. Lastly, **`slack_hooks`** are a list of URI endpoints for alerting on slack.
 > Use credentials of a read-only separate account of USM for this program to minimize its scope. Program just needs to read the sensors and hence least-privilege should be respected in this aspect.
 
 ## Slack Alerts
-Program will notify on slack when:
-- A sensor is down on USM.
+Program will notify on slack when any change in following section appears. 
+- USM System Status.
+- USM Notification Bubbles.
+- USM Subscription's Data Usage.
+- Sensor Connection Status.
+- Sensor Network Details.
+- Sensor Syslog Details.
+
+Program will notify on following occasions as well.
 - Automation of USM console couldn't work as expected.
 - Connection to Selenium server couldn't be established.
