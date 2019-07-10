@@ -13,12 +13,29 @@ You can deploy the project using cloudformation but it assumes the following arc
 
 Private subnets and security groups are needed to be mentioned in cloudformation as parameters and if you have not setup the architect, you'd have to make one before using cloudformation template for deployment.
 
-### Lambda & EC2 connection
+### Lambda & EC2 connection (internal)
 AWS Lambda will need an internal connection with a EC2 machine that will be hosting the selenium server. Using the internal IP of EC2 machine, lambda will make remote connection to make browser work since using it directly on Lambda is not natively supported and is prone to deployment package size limitations.  
 To make lambda access EC2 internally, they both need to be in same VPC while lambda needs to be hosted on private subnet(s) inside that VPC. Lastly, the targeted VPC must have a NAT Gateway allowing traffic to outside network since lambda would need that to fetch config file from the normal internat.  
 > Using EC2 internal connection is strongly recommended since it prevents security concerns related to connection between lambda and EC2 over plain HTTP protocol.  
 
 See more information about accessing internal resources from lambda [here.](https://docs.aws.amazon.com/lambda/latest/dg/vpc.html)
+
+### Lambda & EC2 connection (external)
+Internal connection between lambda and EC2 would need a NAT Gateway which can incur around $30 every month. We can use external connection between lambda and EC2 via HTTPS and get rid of NAT Gateway altogether.  
+Clone and install certbot from [here.](https://github.com/certbot/certbot) Install `letsencrypt` package and run the following command to initate certification process:
+```
+apt-get install letsencrypt
+git clone https://github.com/certbot/certbot
+cd certbot/
+./certbot-auto certonly --manual --agree-tos -d <ec2-machine-ip>.sslip.io
+```
+**`sslip.io`** is an online service having a custom DNS server running to point back to the ip used in subdomain. For example, **`1-1-1-1.sslip.io`** would be directed to **`1.1.1.1`**. Similarly, **`<ec2-machine-ip>.sslip.io`** would go to **`<ec2-machine-ip>`**.  
+Keep in mind the following steps to get the certificate.
+1. During the certificate issuance command, you will be asked to set a validation response against a acme validation path which can be done using nginx and you'd have to allow ingress traffic to port 80 during this process.  
+2. Once validated, you will have a certificate chain file and private key used to create the certificate. These two files would then be used in nginx configuration to enable SSL.  
+  
+
+Finally, allow ingress traffic to 443 port for HTTPS traffic and disable traffic to port 80 and other open ports if there are any. More details on certification process are documented in `1.selenium.nginx.conf`.
 
 
 ## AWS Lambda Deployment
