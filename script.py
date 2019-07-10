@@ -7,7 +7,9 @@ import boto3
 import zipfile
 import logging
 from urllib.parse import urljoin
-from urllib3.exceptions import NewConnectionError, MaxRetryError
+from urllib3 import disable_warnings
+from urllib3.exceptions import (
+    NewConnectionError, MaxRetryError, InsecureRequestWarning)
 
 import requests
 import opencrypt
@@ -29,6 +31,8 @@ handler = logging.StreamHandler()
 handler.setLevel(logging.INFO)
 handler.setFormatter(logging.Formatter('%(asctime)s: %(message)s'))
 logger.addHandler(handler)
+
+disable_warnings(InsecureRequestWarning)
 
 
 def _exit(code, message):
