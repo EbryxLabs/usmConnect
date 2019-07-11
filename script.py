@@ -23,6 +23,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
     StaleElementReferenceException, TimeoutException)
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+from bs4 import BeautifulSoup as BSoup
 
 
 logger = logging.getLogger(__name__)
@@ -390,39 +391,33 @@ def wait_for_element(driver, selector, timeout=30,
             state=state, count=count+1)
 
 
-def get_sensors_status(config, driver, skip_page=False):
+def get_sensors_status(config, driver):
 
     sensors = list()
+    sensor_link = driver.find_element_by_css_selector('a#nav-link-sensors')
+    logger.info('Visting sensors page link...')
 
-    if not skip_page:
-        sensor_link = driver.find_element_by_css_selector('a#nav-link-sensors')
-        logger.info('Visting sensors page link...')
+    driver.get(sensor_link.get_attribute('href'))
+    logger.info('Waiting for sensors page...')
 
-        driver.get(sensor_link.get_attribute('href'))
-        logger.info('Waiting for sensors page...')
-
-        res = wait_for_element(driver, '#table-sensors-list', timeout=15)
-        if res and res.get('exit'):
-            message = 'Browser timed out after 3rd retry ' \
-                'of waiting for element.'
-            logger.info(message)
-            return sensors
+    res = wait_for_element(driver, '#table-sensors-list', timeout=15)
+    if res and res.get('exit'):
+        message = 'Browser timed out after 3rd retry ' \
+            'of waiting for element.'
+        logger.info(message)
+        return sensors
 
     logger.info('Finding disconnected sensors from page...')
-    for row in driver.find_elements_by_css_selector(
-            '#table-sensors-list tr.result-row'):
-        try:
-            _id = row.get_attribute('id').replace('result-row-', str())
-            text = row.find_element_by_css_selector(
-                '.result-column-sensor-status').text
-            name = row.find_element_by_css_selector(
-                '.result-column-sensor-name').text.split('\n')[0]
-            ip = row.find_element_by_css_selector(
-                '.result-column-sensor-ip').text
-            sensors.append({'id': _id, 'name': name, 'text': text, 'ip': ip})
-
-        except StaleElementReferenceException:
-            return get_sensors_status(config, driver, skip_page=True)
+    soup = BSoup(driver.page_source, 'html.parser')
+    for row in soup.select('#table-sensors-list tr.result-row'):
+        _id = row.get('id').replace('result-row-', str())
+        text = row.select('.result-column-sensor-status')[0] \
+            .get_text().strip('\n').split('\n')[0].strip()
+        ip = row.select('.result-column-sensor-ip')[0] \
+            .get_text().strip('\n').split('\n')[0].strip()
+        name = row.select('.result-column-sensor-name')[0] \
+            .get_text().strip('\n').split('\n')[0]
+        sensors.append({'id': _id, 'name': name, 'text': text, 'ip': ip})
 
     return sensors
 
@@ -432,7 +427,7 @@ def get_system_status(config, driver):
     status = dict()
     logger.info('Waiting for intercom container to be clickable...')
     wait_for_element(driver, '#nav-tab-container-intercom',
-                     state='clickable', wait=3)
+                     state='clickable', wait=5)
     driver.find_element_by_css_selector('#nav-tab-container-intercom').click()
 
     logger.info('Waiting for notification bubbles...')
