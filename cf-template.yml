@@ -29,12 +29,6 @@ Parameters:
   KMSKeyArn:
     Type: String
     Description: ARN of KMS key to use for encryption with lambda.
-  SubnetIDs:
-    Type: List<AWS::EC2::Subnet::Id>
-    Description: List of Subnet Ids to attach lambda to.
-  SecurityGroupIDs:
-    Type: List<AWS::EC2::SecurityGroup::Id>
-    Description: List of Security Group Ids to attach lambda with.
 Resources:
   IAMRoleInstance:
     Type: 'AWS::IAM::Role'
@@ -108,11 +102,8 @@ Resources:
       Handler: script.main
       Runtime: python3.6
       MemorySize: 128
-      Timeout: '200'
+      Timeout: '300'
       KmsKeyArn: !Ref KMSKeyArn
-      VpcConfig:
-        SubnetIds: !Ref SubnetIDs
-        SecurityGroupIds: !Ref SecurityGroupIDs
     DependsOn:
       - IAMRoleInstance
   CloudWatchEvent:
