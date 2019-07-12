@@ -12,9 +12,6 @@ Parameters:
   S3CodeArchivePath:
     Type: String
     Description: Lambda code path inside selected S3 bucket.
-  S3DataFilePath:
-    Type: String
-    Description: Path to S3 file to store history data. (e.g. mybucket/myfolder/myfile.json)
   AESKey:
     Type: String
     Description: AES key that code needs to decrypt config file.
@@ -68,14 +65,6 @@ Resources:
                   - 'kms:Encrypt'
                   - 'kms:Decrypt'
                 Resource: !Ref KMSKeyArn
-              - Effect: Allow
-                Action:
-                  - 's3:GetObject'
-                  - 's3:PutObject'
-                Resource: !Join
-                  - ''
-                  - - 'arn:aws:s3:::'
-                    - !Ref S3DataFilePath
   LambdaInstance:
     Type: 'AWS::Lambda::Function'
     Properties:
@@ -89,7 +78,6 @@ Resources:
           AES_KEY: !Ref AESKey
           AES_IV: !Ref AESIV
           CONFIG_FILE: !Ref ConfigFile
-          S3_DATA_FILE: !Ref S3DataFilePath
       Role: !Join 
         - ''
         - - 'arn:aws:iam::'
