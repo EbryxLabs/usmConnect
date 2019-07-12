@@ -2,8 +2,6 @@ import os
 import stat
 import time
 import json
-import copy
-import boto3
 import zipfile
 import logging
 from urllib.parse import urljoin
@@ -102,73 +100,6 @@ def validate_config(config):
         config['selenium_host'] = 'http://127.0.0.1:4444/wd/hub'
 
 
-def get_data_file():
-
-    if not os.environ.get('S3_DATA_FILE'):
-        message = 'No S3_DATA_FILE environment variable exists.'
-        return _exit(404, message)
-
-    filepath = os.environ['S3_DATA_FILE']
-    if filepath.startswith('file:///'):
-        data_filename = filepath.split('file:///')[-1]
-        logger.info('Fetching data file from filesystem: %s', data_filename)
-        if not os.path.isfile(data_filename):
-            open(data_filename, 'w')
-            return dict()
-
-        data = open(data_filename, 'r').read()
-        if data:
-            try:
-                return json.loads(data)
-            except json.JSONDecodeError as exc:
-                return _exit(500, str(exc))
-        else:
-            return dict()
-
-    elif filepath.startswith('s3://'):
-        bucket_name = filepath.replace('s3://', str()).split('/')[0]
-        object_key = '/'.join(filepath.replace('s3://', str()).split('/')[1:])
-    else:
-        bucket_name = filepath.split('/')[0]
-        object_key = '/'.join(filepath.split('/')[1:])
-
-    logger.info('Fetching data file via S3: [%s][%s]', bucket_name, object_key)
-    s3_client = boto3.client('s3')
-    response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
-    data = response.get('Body').read().decode('utf8')
-    if data:
-        try:
-            return json.loads(data)
-        except json.JSONDecodeError as exc:
-            message = 'Error decoding S3 data file as JSON: ' + str(exc)
-            return _exit(500, message)
-    else:
-        return dict()
-
-
-def update_data_file(content):
-
-    filepath = os.environ['S3_DATA_FILE']
-    if filepath.startswith('file:///'):
-        data_filename = filepath.split('file:///')[-1]
-        logger.info('Updating data file onto filesystem: %s', data_filename)
-        json.dump(content, open(data_filename, 'w'), indent=2)
-        return
-
-    elif filepath.startswith('s3://'):
-        bucket_name = filepath.replace('s3://', str()).split('/')[0]
-        object_key = '/'.join(filepath.replace('s3://', str()).split('/')[1:])
-
-    else:
-        bucket_name = filepath.split('/')[0]
-        object_key = '/'.join(filepath.split('/')[1:])
-
-    logger.info('Updating data file on S3: [%s][%s]', bucket_name, object_key)
-    s3_client = boto3.client('s3')
-    body = json.dumps(content).encode('utf8')
-    s3_client.put_object(Body=body, Bucket=bucket_name, Key=object_key)
-
-
 def get_auth_token(config):
 
     usm = config['usm']
@@ -226,30 +157,35 @@ def push_slack_text(config, data):
         logger.info('No webhook is specified. Skipping slack push.')
         return slack_text
     if not data:
-        logger.info('No disconnected sensor detected. Skipping slack push.')
+        logger.info('No data found. Skipping slack push.')
         return slack_text
 
     disconns = [
         x for x in data['sensors']
-        if x.get('text') and 'connection lost' in x.get('text').lower()
+        if 'connection lost' in x.get('text', str()).lower()
         if x.get('ip') not in config.get('whitelist', list())
-        if x.get('name') not in config.get('whitelist', list())]
+        if x.get('name') not in config.get('whitelist', list())
+    ]
     logger.info('[%d] sensors are found to be disconnected.', len(disconns))
     tick, cross = ':heavy_check_mark:', ':heavy_multiplication_x:'
 
-    if data.get('status', dict()).get('text'):
-        symbol = tick if 'all systems operational' in data[
-            'status'].get('text', str()).lower() else cross
-        slack_text += '*Status:*\n> %s %s (%s)\n\n' % (
-            symbol, data['status'].get('text', str()).replace(
-                'Status: ', str()).split('\n')[0], data['status'].get(
-                    'notices', str()))
+    status_text = data.get('status', dict()).get('text', str())
+    notices_text = data.get('status', dict()).get('notices', str())
+
+    _text = str()
+    if status_text and 'all systems operational' not in status_text:
+        _text = status_text.replace('Status: ', str()).split('\n')[0]
+    if not notices_text.startswith('0'):
+        _text += ' (%s)\n\n' % (notices_text) \
+            if _text else '(%s)\n\n' % (notices_text)
+    else:
+        _text += '\n\n' if _text else str()
+
+    slack_text += '*Status:*\n>  %s' % (_text) if _text else str()
 
     if not config.get('storage') and data.get('storage'):
-        slack_text += '*Storage:*\n> Consumed: *%s/%s*\n' \
-            '> Remaining: *%s*\n> Projected: *%s*\n' % (
-                data['storage']['consumed'], data['storage']['total'],
-                data['storage']['remaining'], data['storage']['projected'])
+        slack_text += '*Storage:*\n> Consumed: *%s / %s*\n' % (
+            data['storage']['consumed'], data['storage']['total'])
     elif not data.get('storage'):
         slack_text += '*Storage:*\n' \
             '> %s Details could not be retrieved.\n' % (cross)
@@ -257,12 +193,12 @@ def push_slack_text(config, data):
     logger.info('Pushing status and storage details to slack...')
     alert_on_slack(config, slack_text)
 
-    if not data['sensors']:
+    if not data.get('sensors'):
         slack_text += '*Sensors:*\n' \
             '> %s Details could not be retrieved.\n' % (cross)
 
+    slack_text = str()
     for sensor in data['sensors']:
-        slack_text = str()
         if not(sensor.get('name') or sensor.get('ip')):
             continue
 
@@ -271,31 +207,24 @@ def push_slack_text(config, data):
             logger.info('Whitelisted sensor (%s).', sensor.get('name'))
             continue
 
-        if len(sensor.keys()) == 3:
-            logger.info('Skipping sensor (%s) as there\'s '
-                        'nothing to report', sensor.get('name'))
-            continue
-
         slack_text += '\n*(%s)* %s\n' % (
             sensor.get('name', 'N/A'), sensor.get('ip', 'N/A'))
 
-        if sensor.get('text'):
-            symbol = cross if 'connection lost' in \
-                sensor.get('text', str()).lower() else tick
-            slack_text += '> \t%s %s\n' % (symbol, sensor['text'])
+        if 'connection lost' in sensor.get('text', str()):
+            slack_text += '> \t%s %s\n' % (cross, sensor['text'])
 
         if sensor.get('events'):
             slack_text += '> \t*Events:*\n> \t\tLatest: *`%s`*\n' \
                 '> \t\tCount: *`%s`*\n' % ((sensor.get('events', dict()).get(
-                    'timestamps', list()) or ['N/A'])[-1], sensor.get(
+                    'timestamps', list()) or ['None'])[-1], sensor.get(
                         'events', dict()).get('count', 0))
 
         if sensor.get('network'):
             slack_text += '> \t*Network:*\n'
             for desc, status in sensor.get('network').items():
-                symbol = tick if 'success' in status.lower() else cross
-                slack_text += '> \t\t%s %s.\n' % (symbol, desc)
-        elif sensor.get('_network'):
+                if 'success' not in status.lower():
+                    slack_text += '> \t\t%s %s.\n' % (cross, desc)
+        else:
             slack_text += '> \t*Network:*\n' \
                 '> \t\t%s Details could not be retrieved.\n' % (cross)
 
@@ -305,18 +234,17 @@ def push_slack_text(config, data):
                 if not entry:
                     continue
                 symbol = tick if entry.get('packets') is not '0' else cross
-                slack_text += '> \t\t%s *%s* packets received.' \
-                    '\t*`%s:%s`*\n' % (
-                        symbol, entry.get('packets'), entry.get(
-                            'protocol', str()).split(' ')[-1],
-                        entry.get('port'))
-        elif sensor.get('_syslog'):
+                slack_text += '> \t\t%s *%s* packets.\t*`%s:%s`*\n' % (
+                    symbol, entry.get('packets'),
+                    entry.get('protocol', str()).split(' ')[-1],
+                    entry.get('port'))
+        else:
             slack_text += '> \t*Syslog:*\n' \
                 '> \t\t%s Details could not be retrieved.\n' % (cross)
 
         logger.info('Pushing sensor (%s) details to '
                     'slack...', sensor.get('name'))
-        alert_on_slack(config, slack_text)
+    alert_on_slack(config, slack_text)
 
 
 def alert_on_slack(config, text):
@@ -533,12 +461,11 @@ def populate_sensor_details(config, driver, sensors):
         sensor['network'], sensor['syslog'] = dict(), list()
         logger.info('Waiting for network table...')
         res = wait_for_element(
-            driver, '.av-table-striped.checks', timeout=20)
+            driver, '.av-table-striped.checks', timeout=10)
         if res and res.get('exit'):
             message = 'Browser timed out after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
-            status['_network'] = True
 
         for row in driver.find_elements_by_css_selector(
                 '.av-table-striped.checks tr.ng-scope'):
@@ -560,7 +487,6 @@ def populate_sensor_details(config, driver, sensors):
             message = 'Browser timed out after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
-            sensor['_syslog'] = True
 
         for row in driver.find_elements_by_css_selector(
                 '.av-table-striped.syslog tr.ng-scope'):
@@ -576,64 +502,12 @@ def populate_sensor_details(config, driver, sensors):
                 'port': port, 'packets': packets})
 
 
-def check_diff(data, old_data):
-
-    if isinstance(data, dict) and isinstance(old_data, dict):
-
-        if data.get('packets') and old_data.get('packets') and \
-                data.get('packets') != old_data.get('packets'):
-            return data
-        if data.get('consumed') and old_data.get('consumed'):
-            return data
-
-        for key, value in data.copy().items():
-            if key not in old_data or key.startswith('_'):
-                continue
-            if isinstance(value, dict):
-                data[key] = check_diff(value, old_data[key])
-                data.pop(key) if not data[key] else None
-            if isinstance(value, list):
-                data[key] = check_diff(value, old_data[key])
-                data.pop(key) if not data[key] else None
-
-            if data.get('id') and old_data.get('id'):
-                if key == 'text' and value == old_data.get(key):
-                    data.pop(key)
-                continue
-            if isinstance(value, str) or isinstance(
-                    value, int) or isinstance(value, float):
-                data.pop(key) if value == old_data.get(key) else None
-        return data
-
-    if isinstance(data, list) and isinstance(old_data, list):
-        try:
-            _list = list(set(data) - set(old_data))
-        except TypeError:
-            _list = data
-
-        for idx, item in enumerate(_list[:]):
-            if isinstance(item, dict):
-                for _id in ['id', 'protocol']:
-                    for old_item in old_data:
-                        if isinstance(old_item, dict) and old_item.get(
-                               _id) == item.get(_id):
-                            _list[idx] = check_diff(item, old_item)
-
-        _list = [x for x in _list if x]
-        return _list
-
-
 def main(event, context):
 
     config = read_config()
     if config.get('statusCode'):
         logger.info(config)
         return config
-
-    content = get_data_file()
-    if content.get('statusCode'):
-        logger.info(content)
-        return content
 
     logger.info(str())
 
@@ -699,10 +573,7 @@ def main(event, context):
         else:
             get_usm_events(config, token, data['sensors'])
 
-        logger.info('Checking diff between old state of USM...')
-        filtered_data = check_diff(copy.deepcopy(data), content)
-        push_slack_text(config, filtered_data)
-        update_data_file(data)
+        push_slack_text(config, data)
 
     except Exception as exc:
         logger.info('Exception occured in code.')
