@@ -210,7 +210,7 @@ def push_slack_text(config, data):
         slack_text += '\n*(%s)* %s\n' % (
             sensor.get('name', 'N/A'), sensor.get('ip', 'N/A'))
 
-        if 'connection lost' in sensor.get('text', str()):
+        if 'connection lost' in sensor.get('text', str()).lower():
             slack_text += '> \t%s %s\n' % (cross, sensor['text'])
 
         if sensor.get('events'):
