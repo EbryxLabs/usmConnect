@@ -478,6 +478,16 @@ def populate_sensor_details(config, driver, sensors):
             sensor['network'][desc] = status
 
         syslog_tab = driver.find_element_by_id('link-syslog-configuration')
+
+        logger.info('Forcing click on syslog tab...')
+        cname = syslog_tab.get_attribute('class')
+        new_cname = cname.replace(' active', ' inactive')
+        driver.execute_script(
+            'arguments[0].setAttribute('
+            '"class", "' + new_cname + '")', syslog_tab)
+        if cname != new_cname:
+            logger.info('Changed class name from [%s] '
+                        'to [%s]', cname, new_cname)
         syslog_tab.click()
 
         logger.info('Waiting for syslog table...')
@@ -556,6 +566,7 @@ def main(event, context):
         data['storage'] = get_subscription_details(config, driver)
         data['sensors'] = get_sensors_status(config, driver)
         populate_sensor_details(config, driver, data['sensors'])
+        driver.close()
 
     except Exception as exc:
         driver.close()
