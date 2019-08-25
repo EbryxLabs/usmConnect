@@ -478,17 +478,26 @@ def populate_sensor_details(config, driver, sensors):
             sensor['network'][desc] = status
 
         syslog_tab = driver.find_element_by_id('link-syslog-configuration')
+        logger.info('Waiting for syslog tab to be clickable...')
+        wait_for_element(driver, '#link-syslog-configuration',
+                         state='clickable', wait=5)
 
-        logger.info('Forcing click on syslog tab...')
-        cname = syslog_tab.get_attribute('class')
-        new_cname = cname.replace(' active', ' inactive')
-        driver.execute_script(
-            'arguments[0].setAttribute('
-            '"class", "' + new_cname + '")', syslog_tab)
-        if cname != new_cname:
-            logger.info('Changed class name from [%s] '
-                        'to [%s]', cname, new_cname)
-        syslog_tab.click()
+        try:
+            syslog_tab.click()
+        except:
+            logger.info('Could not click syslog tab. '
+                        'Forcing click on syslog tab...')
+            cname = syslog_tab.get_attribute('class')
+            new_cname = cname.replace(' active', ' inactive')
+            driver.execute_script(
+                'arguments[0].setAttribute('
+                '"class", "' + new_cname + '")', syslog_tab)
+            if cname != new_cname:
+                logger.info('Changed class name from [%s] '
+                            'to [%s]', cname, new_cname)
+
+            syslog_tab = driver.find_element_by_id('link-syslog-configuration')
+            syslog_tab.click()
 
         logger.info('Waiting for syslog table...')
         res = wait_for_element(
