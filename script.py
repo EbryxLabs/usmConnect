@@ -314,7 +314,7 @@ def wait_for_element(driver, selector, timeout=30,
         time.sleep(wait) if wait else None
     except TimeoutException:
         logger.info('Browser timed out while waiting...')
-        wait_for_element(
+        return wait_for_element(
             driver, selector, timeout=timeout,
             state=state, count=count+1)
 
@@ -330,7 +330,7 @@ def get_sensors_status(config, driver):
 
     res = wait_for_element(driver, '#table-sensors-list', timeout=15)
     if res and res.get('exit'):
-        message = 'Browser timed out after 3rd retry ' \
+        message = 'Giving up after 3rd retry ' \
             'of waiting for element.'
         logger.info(message)
         return sensors
@@ -371,7 +371,7 @@ def get_system_status(config, driver):
     res = wait_for_element(
         driver, 'iframe[title="Intercom live chat messenger"]', timeout=5)
     if res and res.get('exit'):
-        message = 'Browser timed out after 3rd retry ' \
+        message = 'Giving up after 3rd retry ' \
             'of waiting for element.'
         logger.info(message)
 
@@ -387,14 +387,15 @@ def get_system_status(config, driver):
     logger.info('Waiting for status element...')
     res = wait_for_element(driver, selector, timeout=10)
     if res and res.get('exit'):
-        message = 'Browser timed out after 3rd retry ' \
+        message = 'Giving up after 3rd retry ' \
             'of waiting for element.'
         logger.info(message)
         status['text'] = 'Could not retrieve status from USM.'
     else:
         status['text'] = driver.find_element_by_css_selector(selector).text
-        driver.switch_to.default_content()
-        logger.info('Switched back to default content.')
+
+    driver.switch_to.default_content()
+    logger.info('Switched back to default content.')
     return status
 
 
@@ -407,7 +408,7 @@ def get_subscription_details(config, driver):
     logger.info('Waiting for subscription page...')
     res = wait_for_element(driver, '#status-my-subscription', timeout=20)
     if res and res.get('exit'):
-        message = 'Browser timed out after 3rd retry ' \
+        message = 'Giving up after 3rd retry ' \
             'of waiting for element.'
         logger.info(message)
         return storage
@@ -417,7 +418,7 @@ def get_subscription_details(config, driver):
         res = wait_for_element(
             driver, 'loading #loading', timeout=15, state='invisible')
         if res and res.get('exit'):
-            message = 'Browser timed out after 3rd retry ' \
+            message = 'Giving up after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
             return storage
@@ -463,7 +464,7 @@ def populate_sensor_details(config, driver, sensors):
         res = wait_for_element(
             driver, '.av-table-striped.checks', timeout=10)
         if res and res.get('exit'):
-            message = 'Browser timed out after 3rd retry ' \
+            message = 'Giving up after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
 
@@ -491,7 +492,7 @@ def populate_sensor_details(config, driver, sensors):
         res = wait_for_element(
             driver, '.av-table-striped.syslog', timeout=10)
         if res and res.get('exit'):
-            message = 'Browser timed out after 3rd retry ' \
+            message = 'Giving up after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
 
@@ -553,7 +554,7 @@ def main(event, context):
         logger.info('Waiting for dashboard...')
         res = wait_for_element(driver, 'av-header #header')
         if res and res.get('exit'):
-            message = 'Browser timed out after 3rd retry ' \
+            message = 'Giving up after 3rd retry ' \
                 'of waiting for element.'
             logger.info(message)
             alert_on_slack(config, '> ' + message)
