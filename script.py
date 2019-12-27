@@ -380,9 +380,9 @@ def get_system_status(config, driver):
     driver.switch_to.frame(iframe)
     logger.info('Switched to intercom iframe.')
 
-    selector = '.intercom-messenger-card-image' \
-        '.intercom-messenger-card-image-left + ' \
-        '.intercom-messenger-card-list-item-text'
+    selector = '.intercom-home-screen-messenger-card' \
+        '.intercom-home-screen-messenger-card-0 ' \
+        '.intercom-messenger-card-list-item-text-title'
 
     logger.info('Waiting for status element...')
     res = wait_for_element(driver, selector, timeout=10)
