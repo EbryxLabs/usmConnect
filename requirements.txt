@@ -6,7 +6,7 @@ cffi==1.12.3
 chardet==3.0.4
 cryptography==3.3.2
 docutils==0.14
-idna==2.8
+idna==3.7
 jmespath==0.9.4
 opencrypt==0.5.1
 pycparser==2.19
