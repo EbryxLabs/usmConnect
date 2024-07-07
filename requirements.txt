@@ -11,7 +11,7 @@ jmespath==0.9.4
 opencrypt==0.5.1
 pycparser==2.19
 python-dateutil==2.8.0
-requests==2.21.0
+requests==2.32.2
 selenium==3.141.0
 six==1.12.0
 soupsieve==1.9.2
