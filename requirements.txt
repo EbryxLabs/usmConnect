@@ -4,7 +4,7 @@ bs4==0.0.1
 certifi==2024.7.4
 cffi==1.12.3
 chardet==3.0.4
-cryptography==42.0.4
+cryptography==43.0.1
 docutils==0.14
 idna==3.7
 jmespath==0.9.4
